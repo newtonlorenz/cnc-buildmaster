@@ -1,0 +1,2 @@
+# Bundled Lit contains significant whitespace inside template-literal regexes.
+scripts/cnc-map-web/workbench.js whitespace=-blank-at-eol linguist-generated=true

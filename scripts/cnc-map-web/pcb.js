@@ -34,7 +34,7 @@ class PcbPanel {
       this.el('pcbStatus').textContent='Aligned draft downloaded. Open and inspect each operation in UGS; Z and height compensation still need review.';
     });
     this.el('pcbRapids').onchange=()=>this.draw();
-    document.querySelectorAll('[data-pcb-section]').forEach(b=>{b.onclick=()=>this.el(b.dataset.pcbSection).scrollIntoView({behavior:'smooth'});});
+    document.querySelectorAll('[data-pcb-section]').forEach(b=>{b.onclick=()=>this.el(b.dataset.pcbSection).scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'nearest'});});
     this.el('pcbZoomIn').onclick=()=>{this.zoom=Math.min(30,this.zoom*1.4);this.draw();};
     this.el('pcbZoomOut').onclick=()=>{this.zoom=Math.max(.3,this.zoom/1.4);this.draw();};
     this.el('pcbZoomFit').onclick=()=>{this.zoom=1;this.pan={x:0,y:0};this.draw();};
@@ -177,7 +177,9 @@ class PcbPanel {
       const edited=()=>{this.operationDrafts.set(op.id,{role:role.value,tool:tool.value,diameter:diameter.value});this.controls();};
       role.onchange=tool.oninput=diameter.oninput=edited;
       const save=document.createElement('button');save.textContent='Save cutter';save.onclick=()=>this.post('pcb-operation',{id:op.id,role:role.value,tool:tool.value,diameter:diameter.value===''?null:Number(diameter.value)},()=>this.operationDrafts.delete(op.id));
-      controls.append(show,role,tool,diameter,save);
+      const diameterLabel=document.createElement('label');diameterLabel.className='diameter-field';
+      const diameterCaption=document.createElement('span');diameterCaption.textContent='Effective Ø (mm)';diameterLabel.append(diameterCaption,diameter);
+      controls.append(show,role,tool,diameterLabel,save);
       for(const [label,action] of [['↑','up'],['↓','down'],['Remove','remove']]){
         const b=document.createElement('button');b.textContent=label;b.setAttribute('aria-label',action+' '+op.name);
         b.onclick=()=>this.post('pcb-operation',{id:op.id,action});controls.append(b);
@@ -242,20 +244,21 @@ class PcbPanel {
     const cx=(xmin+xmax)/2,cy=(ymin+ymax)/2,ox=w/2+this.pan.x,oy=h/2+this.pan.y;
     this.view={scale,cx,cy,ox,oy};
     const point=p=>[ox+(p[0]-cx)*scale,oy-(p[1]-cy)*scale];
-    ctx.fillStyle='#fafbf8';ctx.fillRect(0,0,w,h);
+    const theme=getComputedStyle(document.documentElement),colour=name=>theme.getPropertyValue('--'+name).trim();
+    ctx.fillStyle=colour('canvas');ctx.fillRect(0,0,w,h);
     const [left,top]=point([s.x,s.y+s.height]);
-    ctx.fillStyle='#ede6d6';ctx.fillRect(left,top,s.width*scale,s.height*scale);
-    ctx.strokeStyle='#978469';ctx.lineWidth=1;ctx.strokeRect(left,top,s.width*scale,s.height*scale);
-    ctx.setLineDash([5,5]);ctx.strokeStyle='#afa18a';
+    ctx.fillStyle=colour('stock');ctx.fillRect(left,top,s.width*scale,s.height*scale);
+    ctx.strokeStyle=colour('stock-line');ctx.lineWidth=1;ctx.strokeRect(left,top,s.width*scale,s.height*scale);
+    ctx.setLineDash([5,5]);ctx.strokeStyle=colour('stock-line');
     ctx.strokeRect(left+s.margin*scale,top+s.margin*scale,(s.width-2*s.margin)*scale,(s.height-2*s.margin)*scale);ctx.setLineDash([]);
-    ctx.fillStyle='#6c6f62';ctx.font='11px ui-monospace,monospace';
+    ctx.fillStyle=colour('muted');ctx.font='11px ui-monospace,monospace';
     ctx.fillText(s.width.toFixed(1)+' × '+s.height.toFixed(1)+' mm stock',left,top-12);
-    const colours={isolation:'#b54673',drilling:'#2776b8',outline:'#514caf',clearing:'#ad771f',other:'#46766a'};
+    const colours={isolation:colour('isolation'),drilling:colour('drilling'),outline:colour('outline'),clearing:colour('clearing'),other:colour('accent')};
     for(const op of j.operations){
       if(this.visible.get(op.id)===false)continue;
       for(const rapid of [true,false]){
         if(rapid&&!this.el('pcbRapids').checked)continue;
-        ctx.beginPath();ctx.strokeStyle=rapid?'#b4bcb5':colours[op.role];ctx.lineWidth=rapid?.7:1.2;ctx.setLineDash(rapid?[3,4]:[]);
+        ctx.beginPath();ctx.strokeStyle=rapid?colour('line-strong'):colours[op.role];ctx.lineWidth=rapid?.7:1.2;ctx.setLineDash(rapid?[3,4]:[]);
         for(const path of op.paths){
           if(path.rapid!==rapid)continue;
           path.points.forEach((p,i)=>{const q=point(p);if(i)ctx.lineTo(...q);else ctx.moveTo(...q);});
@@ -270,15 +273,15 @@ class PcbPanel {
         }
       }
     }
-    const origin=point([j.placement.x,j.placement.y]);ctx.strokeStyle='#314c41';ctx.lineWidth=1.5;
+    const origin=point([j.placement.x,j.placement.y]);ctx.strokeStyle=colour('ink');ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(origin[0]-7,origin[1]);ctx.lineTo(origin[0]+7,origin[1]);ctx.moveTo(origin[0],origin[1]-7);ctx.lineTo(origin[0],origin[1]+7);ctx.stroke();
     for(const [label,p] of Object.entries(j.references)){
       if(!p.machine)continue;const [x,y]=point(p.machine);
-      ctx.fillStyle=p.session?'#29694e':'#997221';ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle='#24302d';ctx.font='bold 12px system-ui';ctx.fillText(label,x+9,y-8);
+      ctx.fillStyle=p.session?colour('accent'):colour('warning');ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=colour('ink');ctx.font='bold 12px system-ui';ctx.fillText(label,x+9,y-8);
     }
     const machine=this.getState()?.status?.machineCoord;
-    if(machine){const [x,y]=point([machine.x,machine.y]);ctx.fillStyle='#d42e22';ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();}
-    if(!j.operations.length){ctx.fillStyle='#626d60';ctx.textAlign='center';ctx.font='14px system-ui';ctx.fillText('Add cutting files to preview the PCB',w/2,h/2);ctx.textAlign='left';}
+    if(machine){const [x,y]=point([machine.x,machine.y]);ctx.fillStyle=colour('danger');ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();}
+    if(!j.operations.length){ctx.fillStyle=colour('muted');ctx.textAlign='center';ctx.font='14px system-ui';ctx.fillText('Add cutting files to preview the PCB',w/2,h/2);ctx.textAlign='left';}
   }
 }

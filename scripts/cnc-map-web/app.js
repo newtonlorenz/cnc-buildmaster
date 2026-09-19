@@ -8,7 +8,7 @@ const names=['front-left','front-right','back-right','back-left'];
 const opposites={'front-left':'back-right','front-right':'back-left','back-right':'front-left','back-left':'front-right'};
 const headers={'Authorization':'Bearer '+token,'X-Client-ID':client,'Content-Type':'application/json'};
 let state=null,sending=false,online=false,pollTask=null,lastPrompt=null,activeHold=null,plotTransform=null,errorKind=null;
-let pcbPanel=null;
+let pcbPanel=null,mappingView='teach';
 const number=n=>Number.isFinite(n)?n.toFixed(3):'—';
 const title=name=>name.replace('-',' ');
 function error(message,kind='action'){errorKind=message?kind:null;$('error').hidden=!message;$('error').textContent=message||'';}
@@ -37,10 +37,10 @@ async function poll(fresh=false){
     try{
       const r=await fetch('/api/state',{headers,signal:AbortSignal.timeout(2000)});
       const d=await r.json();if(!r.ok)throw Error(d.error);
-      if(d.apiVersion!==3)throw Error('The server needs the current app version. Restart it with ./cnc-map restart and reopen its link');
+      if(d.apiVersion!==6)throw Error('The server needs the current app version. Restart it with ./cnc-map restart and reopen its link');
       if(errorKind==='connection')error('');
       if(state&&state.sessionId!==d.sessionId){
-        releaseHold();$('attest').checked=false;$('clickMove').checked=false;lastPrompt=null;
+        releaseHold();$('attest').checked=false;$('clickMove').checked=false;lastPrompt=null;mappingView='teach';
       }
       state=d;online=true;
     }catch(e){
@@ -51,36 +51,36 @@ async function poll(fresh=false){
   try{await pollTask;}finally{pollTask=null;}
 }
 function draftGrid(){
-  const area=state?.area,spacing=Number($('spacing').value);
-  if(!area)return null;
-  const sizes=['x','y'].map(a=>area[a][1]-area[a][0]);
-  if(!Number.isFinite(spacing)||spacing<.1||spacing>Math.min(...sizes))return {error:'Choose spacing from 0.1 to '+Math.min(...sizes).toFixed(3)+' mm.'};
-  const counts=sizes.map(size=>Math.ceil(Number((size/spacing).toFixed(6)))+1);
-  if(counts.some(n=>n>100)||counts[0]*counts[1]>2500)return {error:'This grid is too dense. Increase spacing (maximum 2,500 points).'};
-  return {text:counts[0]+' × '+counts[1]+' ≈ '+(counts[0]*counts[1]+1)+' puck placements including the return check. Preview confirms the grid.'};
+  return window.SurfaceGuide.previewGrid(state?.area,Number($('spacing').value),state?.status?.machineCoord);
 }
 function planIsCurrent(){return !!state?.plan&&Number($('spacing').value)===state.plan.grid.spacing;}
 function render(){
   const s=state;
+  window.SurfaceUI?.update(s,online,sending);
   if(s?.configuration){
     const c=s.configuration;
+    $('machineName').textContent=c.name;
     $('configSummary').textContent=(s.demo?'Simulation: ':'Machine: ')+c.name;
     $('configValues').replaceChildren();
     for(const [label,value] of Object.entries({'UGS address':'127.0.0.1:'+c.ugsPort,'Puck height':c.puckHeight+' mm','XY travel':c.feeds.xy+' mm/min','Z travel':c.feeds.z+' mm/min','First contact':c.feeds.first+' mm/min','Second contact':c.feeds.second+' mm/min'})){
       const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;$('configValues').append(dt,dd);
     }
   }
-
   $('arm').disabled=!online||sending||!$('attest').checked||s?.phase!=='setup';
   $('checkConnection').disabled=!online||sending||!!s?.busy;
   $('report').disabled=!online;
   pcbPanel?.update(s,{online,sending});
   if(!s)return;
-  const n=s.corners.length,locked=!online||sending||s.busy||!s.armed||s.phase!=='teach';
+  const n=s.corners.length,baseLocked=!online||sending||s.busy||!s.armed||s.phase!=='teach';
+  if(n<4||!s.area||s.geometryIssue)mappingView='teach';
+  const locked=baseLocked||mappingView!=='teach';
   const currentPlan=planIsCurrent();
   $('mode').textContent=s.demo?'DEMO · NO MACHINE ACCESS':'LOCAL · UGS API';
   $('connection').textContent=!online?'Connection lost':s.phase==='stopped'?'● Session stopped':s.demo?'● Demo connected':s.status?'● UGS '+s.status.state.toLowerCase():'● Local UI · not armed';
-  $('setup').hidden=s.phase!=='setup';$('teach').hidden=s.phase!=='teach';
+  $('setup').hidden=s.phase!=='setup';$('teach').hidden=s.phase!=='teach'||mappingView!=='teach';
+  $('gridPanel').hidden=s.phase!=='teach'||mappingView!=='grid';
+  $('mapMoveControls').hidden=s.phase!=='teach'||mappingView!=='teach';
+  $('surfaceWorkspace').dataset.phase=s.phase==='teach'?mappingView:s.phase;
   $('measurement').hidden=s.phase!=='scan';$('finished').hidden=s.phase!=='complete';
   $('recovery').hidden=s.phase!=='stopped';
   $('operation').textContent=s.phase==='stopped'?'Stopped · review setup':(s.busy||sending)?(s.prompt?'Waiting for you':'Operation in progress'):s.phase;
@@ -94,6 +94,14 @@ function render(){
   for(const axis of ['x','y','z'])$(axis).textContent=number(s.status?.machineCoord?.[axis]);
   const selected=$('corner').value,recorded=s.corners.some(p=>p.name===selected);
   $('cornerNumber').textContent=n+' OF 4 CORNERS RECORDED · ANY ORDER';
+  $('rectangleShortcut').hidden=!s.area||n===4;
+  $('areaReady').hidden=n!==4||!s.area||!!s.geometryIssue;
+  $('completeRectangle').disabled=locked||!!activeHold;
+  $('toPlanning').disabled=baseLocked||!!activeHold||n!==4||!s.area||!!s.geometryIssue;
+  if(s.area){
+    $('rectangleText').textContent=number(s.area.x[1]-s.area.x[0])+' × '+number(s.area.y[1]-s.area.y[0])+' mm. '+(4-n)+' corner'+(4-n===1?'':'s')+' can be inferred from the points you recorded.';
+    $('completeRectangle').textContent='Accept '+(4-n)+' remaining corner'+(4-n===1?'':'s')+' & plan grid';
+  }
   $('cornerTitle').textContent=title(selected);
   $('jogHint').textContent=n===0?'Choose whichever corner is closest. Set a raised Z that clears the puck and clamps throughout the area.':
     n===1?'Teach the opposite corner next to unlock exact positioning for the remaining corners. Keep the same raised Z.':
@@ -103,7 +111,7 @@ function render(){
   for(const option of $('corner').options)option.textContent=title(option.value)+(s.corners.some(p=>p.name===option.value)?' ✓':'');
   $('gotoCorner').disabled=locked||!!activeHold||!s.area;
   $('clickMove').disabled=locked||!!activeHold||!s.area;
-  $('mapHint').textContent=s.area?(n<4?'Outline known. Move to the remaining corners and record each before scanning.':'Click inside the rectangle to move at the taught raised Z.'):'Record two opposite corners to define the positioning area.';
+  $('mapHint').textContent=s.area?(n<4?'Outline known. Click a dashed corner to accept it, or move there and record its position.':'Click inside the rectangle to move at the taught raised Z.'):'Record two opposite corners to define the positioning area.';
   $('plot').classList.toggle('clickable',!$('clickMove').disabled&&$('clickMove').checked);
   const allowed=n===0?'xyz':'xy';
   document.querySelectorAll('[data-axis]').forEach(b=>{
@@ -122,35 +130,73 @@ function render(){
     (!s.nativeJog?'Smooth Hold needs the UGS extension.':'Maximum follows controller settings; allow room to decelerate.');
   if(activeHold&&s.phase!=='teach')releaseHold();
   $('capture').disabled=locked||!!activeHold;
+  $('saveCorner').disabled=locked||!!activeHold;
   $('capture').textContent=(recorded?'Update':'Record')+' '+selected+' corner ↵';
-  $('reset').disabled=locked;$('planning').hidden=n<4;
-  $('spacing').disabled=locked;
-  $('preview').disabled=locked||!s.area;$('scan').disabled=locked||!currentPlan;
-  $('planSummary').hidden=!s.plan;
+  $('reset').disabled=locked;
+  $('spacing').disabled=baseLocked;
   const draft=draftGrid();
-  $('gridDraft').textContent=draft?.error||draft?.text||'';
-  $('count').textContent=s.plan?s.plan.grid.x.length*s.plan.grid.y.length:'—';
+  $('preview').disabled=baseLocked||!s.area||!!draft?.error||!draft?.startsHere;
+  $('scan').disabled=baseLocked||!currentPlan;
+  $('preview').hidden=currentPlan;
+  $('scan').hidden=!s.plan;
+  $('planSummary').hidden=!s.plan;
+  $('gridDraft').textContent=draft?.error||(draft?draft.grid.x.length+' × '+draft.grid.y.length+' grid · '+draft.placements+' puck placements, including return check.':'');
+  $('gridDraft').classList.toggle('invalid',!!draft?.error);
+  $('gridArea').textContent=s.area?number(s.area.x[1]-s.area.x[0])+' × '+number(s.area.y[1]-s.area.y[0])+' mm usable area. Map only the area the job needs.':'';
+  const choices=window.SurfaceGuide.gridChoices(s.area);
+  document.querySelectorAll('[data-grid-choice]').forEach((b,i)=>{
+    const option=choices[i];b.disabled=baseLocked||!option||!!option.draft?.error;
+    b.setAttribute('aria-pressed',String(option?.spacing===Number($('spacing').value)));
+    b.querySelector('span').textContent=option&&!option.draft?.error?option.draft.placements+' placements · '+option.spacing+' mm':'Unavailable';
+  });
+  $('gridStartHelp').textContent=draft?.error?'':draft?.startsHere?'The cutter is at a grid point. Measurement will start here.':'The cutter is between grid points. Move to a corner before previewing the route.';
+  $('gridReturn').hidden=!draft||!!draft.error||draft.startsHere;
+  $('gridReturn').disabled=baseLocked||!!activeHold;
+  const currentPosition=s.status?.machineCoord;
+  const nearest=currentPosition?[...s.corners].sort((a,b)=>Math.hypot(a.x-currentPosition.x,a.y-currentPosition.y)-Math.hypot(b.x-currentPosition.x,b.y-currentPosition.y))[0]:null;
+  if(nearest)$('gridReturn').textContent='Move to '+title(nearest.name)+' · X '+number(nearest.x)+' Y '+number(nearest.y);
+  $('count').textContent=draft&&!draft.error?draft.points:'—';
   if(s.plan){
     const g=s.plan.grid,total=g.x.length*g.y.length;
-    const seconds=((s.route?.distance||0)/(s.configuration?.feeds.xy||100)*60).toFixed(1);
+    const seconds=((s.route?.distance||0)/(s.plan.feeds.xy)*60).toFixed(1);
     $('planText').textContent=!currentPlan?'Spacing changed. Preview the updated grid before scanning.':
-      g.x.length+' × '+g.y.length+' grid · '+(total+1)+' puck placements including return. '+Math.round(s.route?.distance||0)+' mm XY travel (about '+seconds+' s at commanded feed). Traverse at machine Z '+number(s.plan.travelZ)+' mm. First contact: '+s.plan.feeds.first+' mm/min. Second contact: '+s.plan.feeds.second+' mm/min.';
+      g.x.length+' × '+g.y.length+' grid · '+(total+1)+' puck placements including return. '+Math.round(s.route?.distance||0)+' mm XY travel (about '+seconds+' s at commanded feed). Traverse at machine Z '+number(s.plan.travelZ)+' mm; probe '+s.plan.feeds.first+' then '+s.plan.feeds.second+' mm/min.';
   }
   const p=s.prompt;$('ready').disabled=!online||sending||!p;
-  $('measureTitle').textContent=p?(p.expected===''?'Place the puck.':'Check the setup.'):'Measuring & moving…';
+  const point=s.currentPoint,placement=p?.expected===''&&!!point,returning=point?.index===point?.total;
+  $('measureTitle').textContent=placement?(returning?'Repeat the starting point':'Place puck · point '+point.index+' of '+point.total):p?.expected==='accept observations'?'Review your observations':p?.expected==='contact ready'?'Check probe contact':p?'Check the setup':'Measuring & moving…';
+  $('pointGuide').hidden=!point||p?.expected==='accept observations';
+  if(point){
+    $('pointLocation').textContent='X '+number(point.point.x)+'   Y '+number(point.point.y)+' mm';
+    $('pointInstruction').textContent=placement?(returning?'Place the puck where the scan began. This final repeat checks whether the reference drifted.':'Seat the puck flat under the cutter. Tip centred, gap below '+(s.plan?.probe?.firstSearch||5)+' mm. Clear your hands, then press Ready or Enter.'):'Keep hands clear. Wait for the next placement prompt before moving the puck.';
+    const next=s.route?.points[point.index];
+    $('nextPoint').textContent=next?'Next: X '+number(next.x)+' · Y '+number(next.y)+' mm'+(point.index===point.total-1?' · return check':'')+'. Travel follows the measurement automatically.':'Final measurement · no further XY travel.';
+  }
+  $('promptText').hidden=placement;
   $('promptText').textContent=p?.prompt||'Keep hands clear and leave the puck stationary until the next placement prompt.';
-  $('ready').textContent=p?.expected===''?'Ready — measure & advance ↵':p?.expected==='contact ready'?'Contact checked — continue':p?.expected==='accept observations'?'Accept observations & save':'Confirm displayed checks';
+  $('probeDetails').hidden=!placement;$('probeContract').textContent=placement?p.prompt:'';
+  $('ready').textContent=placement?(returning?'Ready — check return ↵':'Ready — measure & advance ↵'):p?.expected==='contact ready'?'Contact checked — continue':p?.expected==='accept observations'?'Accept observations & save':'Confirm displayed checks';
   lastPrompt=p;
   const measured=s.measurements.length,total=s.route?.points.length||1,last=s.measurements.at(-1);
   $('scanProgress').max=total;$('scanProgress').value=measured;
   $('scanProgressText').textContent=(s.demo?'SIMULATED · ':'')+measured+' / '+total+' measurements'+(last?' · last repeat spread '+number(last.spread)+' mm':'')+'.';
-  $('step1').classList.toggle('active',s.phase==='setup'||(s.phase==='teach'&&!currentPlan));
-  $('step2').classList.toggle('active',s.phase==='teach'&&currentPlan);
+  $('scanRemaining').textContent=Math.max(0,total-measured)+' measurements remaining · '+window.SurfaceGuide.formatDuration(s.scanStarted?Date.now()/1000-s.scanStarted:0)+' elapsed, including setup and waiting.';
+  $('step1').disabled=s.phase!=='teach'||sending||s.busy||!!activeHold;
+  $('step2').disabled=baseLocked||n!==4||!s.area||!!s.geometryIssue||!!activeHold;
+  $('backToArea').disabled=baseLocked||!!activeHold;
+  $('step1').classList.toggle('active',s.phase==='setup'||(s.phase==='teach'&&mappingView==='teach'));
+  $('step2').classList.toggle('active',s.phase==='teach'&&mappingView==='grid');
+  $('step1').setAttribute('aria-current',mappingView==='teach'&&s.phase==='teach'?'step':'false');
+  $('step2').setAttribute('aria-current',mappingView==='grid'&&s.phase==='teach'?'step':'false');
   $('step3').classList.toggle('active',['scan','complete'].includes(s.phase));
-  $('areaCaption').textContent=s.plan?'Scan route · dashed return check':n+' of 4 inset corners recorded';
+  $('areaCaption').textContent=s.phase==='scan'?'Measured points and next placement':currentPlan?'Scan route · dashed return check':mappingView==='grid'?'Draft grid · preview the route before measurement':n+' of 4 inset corners recorded';
   $('log').textContent=s.logs.join('\n');
   $('finishedTitle').textContent=s.demo?'Demo complete.':'Measurements saved.';
-  if(s.result)$('finishedText').textContent='Saved: '+s.result.path+'\nReturn drift: '+number(s.result.summary.drift)+' mm. Required material-top G54 Z: '+number(s.result.summary.requiredG54Z)+' mm. Offsets were preserved. Import surface.xyz using UGS AutoLeveler with zero probe offsets and Z surface, verify the cutting datum, then apply compensation once.';
+  $('ugsHandoff').hidden=!s.result||s.demo;
+  if(s.result){
+    $('finishedText').textContent='Saved, not yet imported or applied in UGS. Return drift: '+number(s.result.summary.drift)+' mm. Offsets were preserved.\n'+s.result.path;
+    $('handoffDatum').textContent='Required material-top G54 Z: '+number(s.result.summary.requiredG54Z)+' mm. Verify this reference before cutting; the app has not changed it.';
+  }
   if(s.demo)$('finishedText').textContent='The full workflow completed with simulated readings. No machine commands or map files were created. Start another demo setup here, or restart without --demo for UGS.';
   renderCorners();renderHealth();draw();
 }
@@ -158,7 +204,7 @@ function renderCorners(){
   $('cornerTable').replaceChildren();
   for(const name of names){
     const point=state.corners.find(p=>p.name===name),row=document.createElement('div'),label=document.createElement('span'),value=document.createElement('span');
-    label.textContent=title(name);value.textContent=point?'X '+number(point.x)+' · Y '+number(point.y):'Not recorded';
+    label.textContent=title(name);value.textContent=point?'X '+number(point.x)+' · Y '+number(point.y)+' · '+(point.source||'captured'):'Not recorded';
     row.append(label,value);$('cornerTable').append(row);
   }
 }
@@ -174,17 +220,21 @@ function renderHealth(){
   const time=document.createElement('p');time.className='micro';time.textContent='Checked '+state.diagnostics.checkedAt;host.append(time);
 }
 function draw(){
+  const focusedSuggestion=document.activeElement?.getAttribute('data-suggested');
   const svg=$('plot'),ns='http://www.w3.org/2000/svg';svg.replaceChildren();plotTransform=null;
+  const screenScale=Math.abs(svg.getScreenCTM()?.a||1),pixels=n=>n/screenScale;
   function add(tag,attrs,text){
+    if(attrs['font-size'])attrs['font-size']=pixels(Math.max(11,Number(attrs['font-size'])));
     const e=document.createElementNS(ns,tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));
     if(text)e.textContent=text;svg.append(e);return e;
   }
-  for(let x=30;x<640;x+=25)for(let y=20;y<410;y+=25)add('circle',{cx:x,cy:y,r:1,fill:'#dfe5da'});
-  const ps=state.corners,plan=state.plan;
+  for(let x=30;x<640;x+=25)for(let y=20;y<410;y+=25)add('circle',{cx:x,cy:y,r:1,fill:'var(--grid)'});
+  const ps=state.corners,plan=planIsCurrent()?state.plan:null;
+  const draft=mappingView==='grid'&&!plan?draftGrid():null;
   if(!ps.length){
-    add('rect',{x:115,y:65,width:410,height:260,rx:4,fill:'#eef2e8',stroke:'#c4cfbe','stroke-dasharray':'5 6'});
-    add('text',{x:320,y:190,'text-anchor':'middle',fill:'#64785b','font-size':13},'Your taught area will appear here');
-    add('text',{x:320,y:213,'text-anchor':'middle',fill:'#687662','font-size':11},'Start at whichever corner is closest');return;
+    add('rect',{x:115,y:65,width:410,height:260,rx:4,fill:'var(--stock)',stroke:'var(--stock-line)','stroke-dasharray':'5 6'});
+    add('text',{x:320,y:190,'text-anchor':'middle',fill:'var(--muted)','font-size':13},'Your taught area will appear here');
+    add('text',{x:320,y:213,'text-anchor':'middle',fill:'var(--muted)','font-size':11},'Start at whichever corner is closest');return;
   }
   const xs=ps.map(p=>p.x),ys=ps.map(p=>p.y),xmin=Math.min(...xs),ymin=Math.min(...ys),w=Math.max(...xs)-xmin||20,h=Math.max(...ys)-ymin||20;
   const scale=Math.min(470/w,270/h),ox=320-w*scale/2,oy=205+h*scale/2;
@@ -192,25 +242,40 @@ function draw(){
   const xy=p=>[ox+(p.x-xmin)*scale,oy-(p.y-ymin)*scale];
   if(state.area){
     const a=state.area;
-    add('polygon',{points:[{x:a.x[0],y:a.y[0]},{x:a.x[1],y:a.y[0]},{x:a.x[1],y:a.y[1]},{x:a.x[0],y:a.y[1]}].map(p=>xy(p).join(',')).join(' '),fill:'#e6efdf',stroke:'#91ad80','stroke-width':1.5});
+    add('polygon',{points:[{x:a.x[0],y:a.y[0]},{x:a.x[1],y:a.y[0]},{x:a.x[1],y:a.y[1]},{x:a.x[0],y:a.y[1]}].map(p=>xy(p).join(',')).join(' '),fill:'var(--stock)',stroke:'var(--stock-line)','stroke-width':1.5});
   }
   if(plan&&state.route){
     const points=state.route.points,solid=points.slice(0,-1).map(p=>xy(p).join(',')).join(' ');
-    add('polyline',{points:solid,fill:'none',stroke:'#7c9e7d','stroke-width':1.5,'data-route':'scan'});
-    add('polyline',{points:points.slice(-2).map(p=>xy(p).join(',')).join(' '),fill:'none',stroke:'#8c6b37','stroke-width':2,'stroke-dasharray':'5 5','data-route':'return'});
-    for(const x of plan.grid.x)for(const y of plan.grid.y){const [cx,cy]=xy({x,y});add('circle',{cx,cy,r:3.5,fill:'#729975'});}
-    const [x,y]=xy(points[0]);add('text',{x:x+16,y:y-12,'font-size':11,fill:'#29694e'},'Start / return');
+    add('polyline',{points:solid,fill:'none',stroke:'var(--accent)','stroke-width':1.5,'data-route':'scan'});
+    add('polyline',{points:points.slice(-2).map(p=>xy(p).join(',')).join(' '),fill:'none',stroke:'var(--warning)','stroke-width':2,'stroke-dasharray':'5 5','data-route':'return'});
+    for(const x of plan.grid.x)for(const y of plan.grid.y){const [cx,cy]=xy({x,y});add('circle',{cx,cy,r:3.5,fill:'var(--accent)'});}
+    const [x,y]=xy(points[0]),right=points[0].x>xmin+w/2,back=points[0].y>ymin+h/2;
+    add('text',{x:x+pixels(right?-18:18),y:y+pixels(back?30:-25),'text-anchor':right?'end':'start','font-size':11,fill:'var(--accent)'},'Start / return');
   }
-  for(const p of state.measurements){const [cx,cy]=xy(p);add('circle',{cx,cy,r:6,fill:'#29694e',stroke:'white','stroke-width':1.5});}
-  if(state.currentPoint){const [cx,cy]=xy(state.currentPoint.point);add('circle',{cx,cy,r:14,fill:'none',stroke:'#bd8a37','stroke-width':2});}
+  if(draft&&!draft.error)for(const x of draft.grid.x)for(const y of draft.grid.y){
+    const [cx,cy]=xy({x,y});add('circle',{cx,cy,r:pixels(3),fill:'var(--muted)',opacity:.7,'data-draft-point':'true'});
+  }
+  for(const p of state.measurements){const [cx,cy]=xy(p);add('circle',{cx,cy,r:6,fill:'var(--accent)',stroke:'var(--surface)','stroke-width':1.5});}
+  if(state.currentPoint){
+    const [cx,cy]=xy(state.currentPoint.point);add('circle',{cx,cy,r:pixels(17),fill:'none',stroke:'var(--warning)','stroke-width':2});
+    const next=state.route?.points[state.currentPoint.index];
+    if(next){const [nx,ny]=xy(next);add('circle',{cx:nx,cy:ny,r:pixels(10),fill:'none',stroke:'var(--muted)','stroke-dasharray':'3 3','stroke-width':1.5});add('text',{x:nx,y:ny-pixels(18),'font-size':11,fill:'var(--muted)','text-anchor':'middle'},'Next');}
+  }
+  if(state.area&&!plan)for(const name of names.filter(n=>!ps.some(p=>p.name===n))){
+    const [fb,lr]=name.split('-'),p={x:state.area.x[lr==='left'?0:1],y:state.area.y[fb==='front'?0:1]};
+    const [cx,cy]=xy(p);
+    const marker=add('circle',{cx,cy,r:Math.max(15,pixels(22)),fill:'var(--warning-soft)',stroke:'var(--warning)','stroke-width':2,'stroke-dasharray':'4 3','data-suggested':name,tabindex:$('saveCorner').disabled?-1:0,role:'button','aria-disabled':String($('saveCorner').disabled),'aria-label':'Accept suggested '+name+' corner without movement'});
+    if(name===focusedSuggestion)marker.focus({preventScroll:true});
+    add('text',{x:cx,y:cy-pixels(28),'text-anchor':'middle','font-size':11,fill:'var(--warning)','pointer-events':'none'},'Accept '+name);
+  }
   ps.forEach(p=>{
     const [cx,cy]=xy(p),i=names.indexOf(p.name);
-    add('circle',{cx,cy,r:11,fill:'#fff',stroke:'#29694e','stroke-width':2});
-    add('text',{x:cx,y:cy+3,'text-anchor':'middle','font-size':8,fill:'#29694e'},['FL','FR','BR','BL'][i]);
-    add('text',{x:cx,y:cy+(i<2?25:-18),'text-anchor':'middle','font-size':11,fill:'#667c5c'},p.x.toFixed(1)+', '+p.y.toFixed(1));
+    add('circle',{cx,cy,r:pixels(12),fill:'var(--surface)',stroke:'var(--accent)','stroke-width':2});
+    add('text',{x:cx,y:cy+pixels(4),'text-anchor':'middle','font-size':8,fill:'var(--accent)'},['FL','FR','BR','BL'][i]);
+    add('text',{x:cx,y:cy+(i<2?pixels(26):-pixels(22)),'text-anchor':'middle','font-size':11,fill:'var(--muted)'},p.x.toFixed(1)+', '+p.y.toFixed(1));
   });
   const pos=state.status?.machineCoord;
-  if(pos){const [cx,cy]=xy(pos);add('circle',{cx,cy,r:5,fill:'#dc3c27',stroke:'white','stroke-width':2});}
+  if(pos){const [cx,cy]=xy(pos);add('circle',{cx,cy,r:5,fill:'var(--danger)',stroke:'var(--surface)','stroke-width':2});}
 }
 function plotTarget(e){
   if(!plotTransform||!state?.area)return null;
@@ -226,7 +291,7 @@ function plotTarget(e){
 $('attest').onchange=render;
 $('arm').onclick=()=>call('arm',{confirmed:$('attest').checked});
 $('stop').onclick=()=>{releaseHold();call('stop');};
-$('fresh').onclick=$('newMap').onclick=async()=>{if(await call('new-session'))showWorkspace('surface');};
+$('fresh').onclick=$('newMap').onclick=()=>call('new-session');
 $('checkConnection').onclick=()=>call('diagnostics');
 $('report').onclick=async()=>{
   try{
@@ -237,6 +302,37 @@ $('report').onclick=async()=>{
   }catch(e){error('Report unavailable: '+e.message);}
 };
 $('speed').onchange=render;$('jogMode').onchange=render;$('fastHold').onchange=render;$('spacing').oninput=render;
+function showMappingView(view){
+  if(state?.phase!=='teach'||sending||state.busy||activeHold)return;
+  if(view==='grid'&&(state.corners.length!==4||!state.area||state.geometryIssue))return;
+  mappingView=view;
+  if(view==='grid'&&draftGrid()?.error){
+    const option=window.SurfaceGuide.gridChoices(state.area).find(p=>p.draft&&!p.draft.error);
+    if(option)$('spacing').value=option.spacing;
+  }
+  render();document.querySelector('.mapping-inspector').scrollTop=0;
+  if(matchMedia('(max-width:720px)').matches)document.querySelector('.mapping-inspector').scrollIntoView({block:'start'});
+}
+$('step1').onclick=$('backToArea').onclick=()=>showMappingView('teach');
+$('step2').onclick=$('toPlanning').onclick=()=>showMappingView('grid');
+$('completeRectangle').onclick=async()=>{
+  if(await call('complete-rectangle',{area:state?.area}))showMappingView('grid');
+};
+document.querySelectorAll('[data-grid-choice]').forEach(b=>b.onclick=()=>{
+  const option=window.SurfaceGuide.gridChoices(state?.area)[Number(b.dataset.gridChoice)];
+  if(option&&!option.draft?.error){$('spacing').value=option.spacing;render();}
+});
+$('gridReturn').onclick=()=>{
+  const pos=state?.status?.machineCoord;
+  if(!pos||!state.area)return;
+  const corner=[...state.corners].sort((a,b)=>Math.hypot(a.x-pos.x,a.y-pos.y)-Math.hypot(b.x-pos.x,b.y-pos.y))[0];
+  if(corner)call('goto',{x:corner.x,y:corner.y,speed:$('speed').value});
+};
+$('copyMapPath').onclick=async()=>{
+  if(!state?.result||state.demo)return;
+  try{await navigator.clipboard.writeText(state.result.path);$('copyMapStatus').textContent='File path copied.';}
+  catch{$('copyMapStatus').textContent='Copy unavailable. Select the file path above and copy it.';}
+};
 $('capture').onclick=async()=>{
   const corner=$('corner').value;
   if(await call('capture',{corner})){
@@ -245,7 +341,14 @@ $('capture').onclick=async()=>{
     if(next)$('corner').value=next;render();
   }
 };
-$('corner').onchange=render;$('clickMove').onchange=render;
+function fillCornerEntry(){
+  const name=$('corner').value,recorded=state?.corners.find(p=>p.name===name);
+  const [fb,lr]=name.split('-');
+  const suggested=state?.area?{x:state.area.x[lr==='left'?0:1],y:state.area.y[fb==='front'?0:1]}:null;
+  const point=recorded||suggested;
+  $('cornerX').value=point?point.x:'';$('cornerY').value=point?point.y:'';
+}
+$('corner').onchange=()=>{fillCornerEntry();render();};$('clickMove').onchange=render;
 $('gotoCorner').onclick=()=>{
   if(!state.area)return;const [fb,lr]=$('corner').value.split('-');
   call('goto',{x:state.area.x[lr==='left'?0:1],y:state.area.y[fb==='front'?0:1],speed:$('speed').value});
@@ -255,7 +358,22 @@ $('plot').onpointermove=e=>{
   $('targetHint').textContent=p?.inside?'Target X '+number(p.x)+' · Y '+number(p.y)+' mm':'Machine coordinates · raised Z';
 };
 $('plot').onpointerleave=()=>{$('targetHint').textContent='Machine coordinates · raised Z';};
+function acceptSuggested(name){
+  if(!state?.area||$('saveCorner').disabled)return;
+  const [fb,lr]=name.split('-');
+  call('corner-entry',{corner:name,x:state.area.x[lr==='left'?0:1],y:state.area.y[fb==='front'?0:1]});
+}
+$('saveCorner').onclick=()=>{
+  if(!$('cornerX').value.trim()||!$('cornerY').value.trim())return error('Enter both X and Y.');
+  call('corner-entry',{corner:$('corner').value,x:Number($('cornerX').value),y:Number($('cornerY').value)});
+};
+$('plot').addEventListener('keydown',e=>{
+  const name=e.target.getAttribute('data-suggested');
+  if(name&&['Enter',' '].includes(e.key)){e.preventDefault();e.stopPropagation();acceptSuggested(name);}
+});
 $('plot').onclick=e=>{
+  const suggested=e.target.getAttribute('data-suggested');
+  if(suggested){acceptSuggested(suggested);return;}
   if(!$('clickMove').checked||$('clickMove').disabled||activeHold)return;
   const p=plotTarget(e);if(!p)return;
   if(!p.inside)return error('Choose a point inside the taught rectangle.');
@@ -300,13 +418,14 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseHold
 document.addEventListener('keyup',e=>{if(activeHold?.key===e.key){e.preventDefault();releaseHold();}});
 document.addEventListener('keydown',e=>{
   if(e.repeat){if(['Enter','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown'].includes(e.key))e.preventDefault();return;}
-  if(e.key==='Escape'){e.preventDefault();releaseHold();call('stop');return;}
-  if($('surfaceWorkspace').hidden)return;
-  const element=document.activeElement;
+  if(e.key==='Escape'){e.preventDefault();releaseHold();document.querySelectorAll('dialog[open]').forEach(d=>d.close());call('stop');return;}
+  if(document.querySelector('dialog[open]')||document.querySelector('surface-command-menu')?.opened)return;
+  if(!$('pcbWorkspace').hidden)return;
+  const element=e.composedPath().find(n=>n instanceof HTMLElement&&(n.isContentEditable||['INPUT','SELECT','TEXTAREA','BUTTON','A','SUMMARY'].includes(n.tagName)))||document.activeElement;
   if(e.altKey||e.ctrlKey||e.metaKey||element.isContentEditable||['INPUT','SELECT','TEXTAREA'].includes(element.tagName))return;
   if(e.key==='Enter'){
     // Preserve native activation of the focused button, especially Stop.
-    if(element.tagName==='BUTTON'||element.tagName==='A')return;
+    if(['BUTTON','A','SUMMARY'].includes(element.tagName))return;
     e.preventDefault();if(activeHold)return;
     if(state?.phase==='scan')ready();else if(state?.phase==='teach'&&!$('capture').disabled)$('capture').click();
     return;
@@ -318,28 +437,20 @@ document.addEventListener('keydown',e=>{
     if(!b.disabled){if($('jogMode').value==='hold')startHold(...key,e.key,e.shiftKey);else b.click();}
   }
 });
+document.addEventListener('surface-release-input',releaseHold);
+new ResizeObserver(()=>{if(state)draw();}).observe(document.querySelector('.surface-viewport'));
+document.addEventListener('surface-view',()=>{if(state)draw();});
+document.addEventListener('surface-theme',()=>{if(state)draw();pcbPanel?.draw();});
 const cameraPanel=new CameraPanel();
-document.querySelector('.intro').append($('report'));
-document.querySelector('.workspace-switch').before(document.querySelector('.readouts'));
-$('teach').append($('cornerTable'));
-const openMeasure=document.createElement('button');openMeasure.textContent='Open surface measurement';openMeasure.onclick=()=>showWorkspace('measure');$('teach').append(openMeasure);
-// Each tool has one panel. Movement keys operate only in Machine controls.
-$('cameraWorkspace').append(document.querySelector('.camera-card'));
-$('measureView').append(document.querySelector('#surfaceWorkspace .canvas-card'));
-$('measureControls').append($('planning'), $('planSummary'), $('measurement'), $('finished'));
-$('measureWorkspace').prepend($('surfaceWorkspace').querySelector('nav'));
-const toolTabs={pcb:'pcbTab',surface:'surfaceTab',measure:'measureTab',camera:'cameraTab',config:'configTab'};
+$('utilityDialog').addEventListener('close',()=>cameraPanel.stop());
 function showWorkspace(which){
   releaseHold();
-  if(which!=='camera')cameraPanel.stop();
-  for(const [tool,tab] of Object.entries(toolTabs)){
-    $(tool+'Workspace').hidden=which!==tool;
-    $(tab).setAttribute('aria-selected',String(which===tool));
-  }
-  sessionStorage.setItem('surface-workspace',which);pcbPanel?.draw();
+  $('pcbWorkspace').hidden=which!=='pcb';$('surfaceWorkspace').hidden=which!=='surface';
+  $('pcbTab').setAttribute('aria-selected',String(which==='pcb'));$('surfaceTab').setAttribute('aria-selected',String(which==='surface'));
+  sessionStorage.setItem('surface-workspace',which);pcbPanel?.draw();window.SurfaceUI?.workspace(which);
+  $('pcbTab').tabIndex=which==='pcb'?0:-1;$('surfaceTab').tabIndex=which==='surface'?0:-1;
 }
-for(const [tool,tab] of Object.entries(toolTabs))$(tab).onclick=()=>showWorkspace(tool);
-$('openMachine').onclick=()=>showWorkspace('surface');
+$('pcbTab').onclick=()=>showWorkspace('pcb');$('surfaceTab').onclick=()=>showWorkspace('surface');
 pcbPanel=new PcbPanel({call,getState:()=>state,getHeaders:()=>headers,reportError:error,showSurface:()=>showWorkspace('surface')});
-showWorkspace(Object.hasOwn(toolTabs,sessionStorage.getItem('surface-workspace'))?sessionStorage.getItem('surface-workspace'):'pcb');
+showWorkspace(sessionStorage.getItem('surface-workspace')==='pcb'?'pcb':'surface');
 render();setInterval(()=>poll(),750);poll();

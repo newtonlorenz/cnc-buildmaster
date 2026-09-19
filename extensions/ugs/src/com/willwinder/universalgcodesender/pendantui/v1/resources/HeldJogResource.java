@@ -36,9 +36,9 @@ public final class HeldJogResource implements AutoCloseable {
         IController controller;
         ControllerListener listener;
         String command, reason = "moving", error;
-        long deadline, revision, ackRevision = -1, stopRevision = -1, lastCancel;
+        long deadline, revision, ackRevision = -1, stopRevision = -1;
         Integer commandId;
-        boolean acknowledged, cancelled, finished;
+        boolean acknowledged, cancelled, finished, cancelAfterAck, cancelIssued;
         ControllerStatus status;
     }
     public HeldJogResource(BackendAPI backend) {
@@ -135,9 +135,10 @@ public final class HeldJogResource implements AutoCloseable {
     private void cancel(Active a, String reason) {
         if (a.finished) return;
         if (!a.cancelled) { a.cancelled=true; a.reason=reason; a.stopRevision=a.revision; }
-        // A release may precede the firmware accepting $J. Keep cancellation effective
-        // while that command is pending, until a fresh acknowledged Idle is observed.
-        try { a.controller.cancelJog(); a.lastCancel=clock.getAsLong(); }
+        // Send once after acknowledgement. If release beat the acknowledgement,
+        // tick sends one further cancel after acceptance, never a periodic flood.
+        if (a.cancelAfterAck || (a.cancelIssued && !a.acknowledged)) return;
+        try { a.controller.cancelJog(); a.cancelIssued=true; a.cancelAfterAck=a.acknowledged; a.stopRevision=a.revision; }
         catch (Exception e) { if (a.error == null) a.error="Jog cancel failed: "+e.getMessage(); }
     }
     public synchronized void tick() {
@@ -148,11 +149,11 @@ public final class HeldJogResource implements AutoCloseable {
             if (!a.cancelled && clock.getAsLong()>=a.deadline) cancel(a,"lease expired");
             double end=a.request.expected[Axis.valueOf(a.request.axis).ordinal()]+a.request.delta;
             boolean reached=Math.abs(s.getMachineCoord().get(Axis.valueOf(a.request.axis))-end)<=.0051;
-            if (a.acknowledged && a.revision>a.ackRevision && (!a.cancelled || a.revision>a.stopRevision) &&
+            if (a.acknowledged && a.revision>a.ackRevision && (!a.cancelled || (a.cancelAfterAck && a.revision>a.stopRevision)) &&
                 s.getState()==ControllerState.IDLE && s.getFeedSpeed()==0 && (a.cancelled || reached)) {
                 a.finished=true;
                 if (!a.cancelled) a.reason="travel limit";
-            } else if (a.cancelled && clock.getAsLong()-a.lastCancel>=100) cancel(a,a.reason);
+            } else if (a.cancelled && a.acknowledged && !a.cancelAfterAck) cancel(a,a.reason);
         } catch (Exception e) { fault(a,e.getMessage()); }
     }
     @POST @Path("pulse")

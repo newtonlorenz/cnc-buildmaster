@@ -18,6 +18,7 @@ try{
   const page=await browser.newPage({viewport:{width:1440,height:1050}});
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));
   await page.goto(url);
+  await page.locator('#pcbTab').click();
   await page.locator('#pcbWorkspace').waitFor({state:'visible'});
   await page.waitForFunction(()=>!document.querySelector('#pcbImport').disabled);
   const files=['isolation.nc','drilling.nc','outline.nc'].map(name=>({name,mimeType:'text/plain',buffer:Buffer.from(box)}));

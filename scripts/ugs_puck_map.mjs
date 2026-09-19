@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {checkMachineProfile} from './ugs_machine_profile.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,7 +160,10 @@ export function checkModes(response) {
   const m = response.match(/\[GC:([^\]]+)\]/);
   ensure(m, 'Missing modal report');
   const tokens = m[1].trim().split(/\s+/);
-  for (const token of ['G21', 'G90', 'G94', 'G54', 'M5']) ensure(tokens.includes(token), `Required mode ${token} not active`);
+  // Every move specifies G90; probes and native jogs specify G91.
+  // The inherited distance mode therefore does not change the commanded path.
+  ensure(tokens.filter(t => t === 'G90' || t === 'G91').length === 1, 'Expected one distance mode G90 or G91');
+  for (const token of ['G21', 'G94', 'G54', 'M5']) ensure(tokens.includes(token), `Required mode ${token} not active`);
 }
 export function checkBaseline(response, baseline) {
   const settings = {};
@@ -277,6 +280,20 @@ export function exportMap(c, records) {
     datumMatches: near(c.expectedG54.z, reference - c.puckHeight),
     status: 'Measured map accepted numerically; physical observation, work Z datum and UGS import/application require separate verification'
   };
+}
+
+export function saveMapHandoff(c, result, write) {
+  write('surface.xyz', result.xyz);
+  write('ugs-handoff.json', JSON.stringify({version:1,mapFile:'surface.xyz',
+    sha256:createHash('sha256').update(result.xyz).digest('hex'),units:'MM',
+    coordinates:'G54 work XY, Z relative to reference surface',puckHeight:c.puckHeight,
+    capturedG54:c.expectedG54,requiredG54Z:result.requiredG54Z,
+    importedInUgs:false,appliedInUgs:false,
+    instructions:['Finish custom probing before opening AutoLeveler.',
+      'Import surface.xyz; do not use Scan surface with the puck.',
+      'Use zero probe offsets and zero Z surface for this already normalised map.',
+      'Verify the material-top cutting datum and full toolpath coverage in UGS.',
+      'Apply height compensation exactly once. Keep connection, tool and workholding unchanged.']},null,2));
 }
 
 async function api(route, body) {
@@ -399,8 +416,8 @@ export class Session {
         }
         await this.pause(75);
       }
-      this.log('commandTimeout', {line, sent:p.sent, acknowledged:!!p.done, status:this.lastControllerStatus});
-      throw Error(`Command deadline exceeded waiting for acknowledged, fresh stopped position: ${line}`);
+      this.log('commandTimeout', {line, commandId:p.id, sent:p.sent, acknowledged:!!p.done, stage:!p.sent?'not-sent':!p.done?'awaiting-acknowledgement':'awaiting-stopped-position', status:this.lastControllerStatus});
+      throw Error(`Command deadline exceeded: ${line}; ${!p.sent?'UGS did not send the command':!p.done?'UGS sent the command but no acknowledgement arrived':'acknowledged; fresh stopped position not verified'}. No retry.`);
     } catch (e) { this.fail(e); throw e; }
   }
   async preflight(baseline) {
@@ -615,7 +632,8 @@ export async function main(argv = process.argv.slice(2)) {
     await gate.ask('All points and return check recorded. Confirm every contact/lift/traverse looked normal and setup stayed unchanged: type "accept observations" (otherwise quit; raw evidence only).', 'accept observations');
     session.alive(); await session.verifyReference(); session.alive();
     write('result.json', JSON.stringify({...result, xyz: undefined, records, physicalObservationConfirmed: true, offsetsPreserved: true, appliedInUgs: false}, null, 2));
-    write('surface.xyz', result.xyz); complete = true;
+    saveMapHandoff(c, result, write);
+    complete = true;
     if (web) console.log(JSON.stringify({kind:'result',path:path.join(dir,'surface.xyz'),summary:{...result,xyz:undefined}}));
     say(`Saved ${path.join(dir, 'surface.xyz')}\nReturn drift ${fixed(result.drift)} mm. Offsets preserved. Required material-top G54 Z: ${fixed(result.requiredG54Z)}; current ${fixed(c.expectedG54.z)}. Verify datum and native UGS import separately with probe offsets and Z surface zero. Never apply compensation twice.`);
   } catch (e) {

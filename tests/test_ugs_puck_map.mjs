@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {validateConfig, planRoute, parseEvent, probeContact, commandBounds, checkStatus,
-  commandDeadline, parseOffsets, checkModes, checkBaseline, InputGate, JsonInputGate, ContactMonitor, exportMap, Session} from '../scripts/ugs_puck_map.mjs';
+  commandDeadline, parseOffsets, checkModes, checkBaseline, InputGate, JsonInputGate, ContactMonitor, exportMap, saveMapHandoff, Session} from '../scripts/ugs_puck_map.mjs';
 
 const raw = () => ({version: 1, grid: {x: [0, 50, 100], y: [1, 51, 81], spacing: 50},
   start: {x: 100, y: 1, z: -4.754}, travelZ: -4.754,
@@ -16,6 +20,56 @@ const commandEvent = (kind, id, command, response = 'ok', extra = {}) => JSON.st
 const controllerStatus = s => JSON.stringify({eventType:'ControllerStatusEvent',event:{status:s}});
 const measurements = c => planRoute(c).points.map((p, i, all) => ({...p,
   contactZ: i === all.length - 1 ? -7 + .005 : -7 + p.x * .001 + p.y * .001 - all[0].x * .001 - all[0].y * .001, spread: .005}));
+
+test('saved handoff hashes the exact map bytes and retains the configured puck and datum', t => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'puck-map-handoff-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const c=validateConfig({...raw(),puckHeight:18.5,feeds:{xy:300,z:30,first:25,second:5},outputDir:directory});
+  const result=exportMap(c,measurements(c));
+  const write=(name,data)=>fs.writeFileSync(path.join(c.outputDir,name),data,{flag:'wx'});
+  saveMapHandoff(c,result,write);
+  const map=fs.readFileSync(path.join(directory,'surface.xyz'));
+  const handoff=JSON.parse(fs.readFileSync(path.join(directory,'ugs-handoff.json'),'utf8'));
+  assert.equal(map.toString(),result.xyz);
+  assert.equal(handoff.sha256,createHash('sha256').update(map).digest('hex'));
+  assert.equal(handoff.mapFile,'surface.xyz');assert.equal(handoff.version,1);assert.equal(handoff.units,'MM');
+  assert.equal(handoff.puckHeight,18.5);assert.deepEqual(handoff.capturedG54,c.expectedG54);
+  assert.equal(handoff.requiredG54Z,result.referenceContactZ-18.5);
+  assert.equal(handoff.appliedInUgs,false);assert.equal(handoff.importedInUgs,false);
+  fs.appendFileSync(path.join(directory,'surface.xyz'),'0 0 1\n');
+  assert.notEqual(handoff.sha256,createHash('sha256').update(fs.readFileSync(path.join(directory,'surface.xyz'))).digest('hex'));
+  assert.throws(()=>saveMapHandoff(c,result,write),/EEXIST/);
+});
+
+test('a handoff write failure cannot report a completed save', () => {
+  const c=config(),result=exportMap(c,measurements(c)),written=[];
+  assert.throws(()=>saveMapHandoff(c,result,(name)=>{
+    written.push(name);if(name==='ugs-handoff.json')throw Error('Disk full');
+  }),/Disk full/);
+  assert.deepEqual(written,['surface.xyz','ugs-handoff.json']);
+});
+
+for (const stage of ['not-sent','awaiting-acknowledgement','awaiting-stopped-position']) test(`command timeout identifies ${stage} without retry`, async () => {
+  const c=config(),target={...c.start,x:99},logs=[];
+  let session,clock=0,sends=0,resets=0;
+  session=new Session(c,{now:()=>clock,pause:async ms=>{clock+=ms;},log:(kind,data)=>logs.push({kind,...data}),request:async(route,body)=>{
+    if(route==='machine/softReset'){resets++;return null;}
+    if(route==='machine/sendGcode'){
+      sends++;
+      if(stage!=='not-sent')session.event(commandEvent('COMMAND_SENT',17,body.commands));
+      if(stage==='awaiting-stopped-position')session.event(commandEvent('COMMAND_COMPLETE',17,body.commands));
+      return null;
+    }
+    assert.equal(route,'status/getStatus');return status(c);
+  }});
+  const reason=stage==='not-sent'?/UGS did not send the command/:stage==='awaiting-acknowledgement'?/no acknowledgement arrived/:/fresh stopped position not verified/;
+  await assert.rejects(session.move(target,600),reason);
+  await session.close();
+  const timeout=logs.find(e=>e.kind==='commandTimeout');
+  assert.equal(timeout.stage,stage);assert.equal(timeout.commandId,stage==='not-sent'?undefined:17);
+  assert.equal(timeout.sent,stage!=='not-sent');assert.equal(timeout.acknowledged,stage==='awaiting-stopped-position');
+  assert.match(session.failure.message,/No retry/);assert.equal(sends,1);assert.equal(resets,1);
+});
 
 test('defaults frozen; no implicit old data and no stock-based bounds', () => {
   const c = config(); assert.equal(c.feeds.xy, 600); assert.equal(c.probe.firstSearch, 5);
@@ -73,7 +127,14 @@ test('status rejects wrong offsets, outside command bounds, unexpected movement 
 });
 test('modal and offset guards are exact, retain all stored offsets excluding historical PRB', () => {
   checkModes('[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]');
-  assert.throws(()=>checkModes('[GC:G54 G21 G91 G94 M5]'));
+  assert.doesNotThrow(()=>checkModes('[GC:G54 G21 G91 G94 M5]'));
+  assert.throws(()=>checkModes('[GC:G54 G21 G94 M5]'), /distance mode/);
+  assert.throws(()=>checkModes('[GC:G54 G21 G90 G91 G94 M5]'), /distance mode/);
+  for (const mode of ['G90','G91']) {
+    assert.throws(()=>checkModes(`[GC:G54 G20 ${mode} G94 M5]`), /G21/);
+    assert.throws(()=>checkModes(`[GC:G55 G21 ${mode} G94 M5]`), /G54/);
+    assert.throws(()=>checkModes(`[GC:G54 G21 ${mode} G94 M3]`), /M5/);
+  }
   const offsets=['G54','G55','G56','G57','G58','G59','G28','G30','G92'].map(k=>`[${k}:0.000,0.000,0.000]`).join('\n')+'\n[TLO:0.000]';
   assert.equal(parseOffsets(offsets+'\n[PRB:0,0,0:0]').G54[2],0);
   assert.throws(()=>parseOffsets(offsets.replace('TLO:0.000','TLO:0.100')));
@@ -168,18 +229,19 @@ test('actual UGS event permits boolean limit-switch pins but checks machine/work
   event.event.status.machineCoord.x=null;
   assert.throws(()=>parseEvent(JSON.stringify(event)),/finite/);
 });
-test('complete mocked two-touch cycle lifts to fixed travelZ and preserves every offset', async () => {
+for (const initialMode of ['G90','G91']) test(`complete mocked two-touch cycle from ${initialMode} lifts to fixed travelZ and preserves every offset`, async () => {
   const c=config(); const offsets=['G54','G55','G56','G57','G58','G59','G28','G30','G92'].map(k=>`[${k}:${k==='G54'?'2,-3,-20':'0,0,0'}]`).join('\n')+'\n[TLO:0]';
-  let session, pos={...c.start}, id=0, touches=0, commands=[];
+  let session, pos={...c.start}, id=0, touches=0, commands=[], distanceMode=initialMode;
   session=new Session(c,{request:async(route,body)=>{
     if(route==='status/getStatus')return {...status(c,pos),pins:{x:false,y:false,z:false,probe:false}};
     assert.equal(route,'machine/sendGcode'); const line=body.commands; commands.push(line);
     session.event(commandEvent('COMMAND_SENT',++id,line));
     let response='ok';
-    if(line==='$G')response='[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]\nok';
+    if(line==='$G')response=`[GC:G0 G54 G17 G21 ${distanceMode} G94 M5 M9 T0 F0 S0]\nok`;
     else if(line==='$#')response=offsets+'\nok';
-    else if(line.includes('G38.2')) {touches++; const z=touches===1?-7:-7.005; pos.z=z-.001;response=`[PRB:100,1,${z}:1]\nok`;}
-    else if(line.includes('G1 X'))for(const a of ['x','y','z'])pos[a]=Number(line.match(new RegExp(`${a.toUpperCase()}(-?[\\d.]+)`))[1])+c.expectedG54[a];
+    else if(line.includes('G38.2')) {assert.match(line,/^G91 /);distanceMode='G91';touches++; const z=touches===1?-7:-7.005; pos.z=z-.001;response=`[PRB:100,1,${z}:1]\nok`;}
+    else if(line.includes('G1 X')) {assert.match(line,/^G90 /);distanceMode='G90';}
+    if(line.includes('G1 X'))for(const a of ['x','y','z'])pos[a]=Number(line.match(new RegExp(`${a.toUpperCase()}(-?[\\d.]+)`))[1])+c.expectedG54[a];
     session.event(commandEvent('COMMAND_COMPLETE',id,line,response));
     session.event(controllerStatus({...status(c,pos),pins:{x:false,y:false,z:false,probe:false}}));return null;
   }});

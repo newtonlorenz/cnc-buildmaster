@@ -15,5 +15,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci
+      - run: npm ci --prefix scripts/cnc-map-ui
+      - run: npm run build:ui
+      - run: git diff --exit-code -- scripts/cnc-map-web/workbench.js
       - run: npm test
       - run: npm run test:browser

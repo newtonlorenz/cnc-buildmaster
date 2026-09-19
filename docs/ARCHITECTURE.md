@@ -16,9 +16,22 @@
 | `ugs_puck_map.mjs` | Control the supervised contact sequence and save measurements. |
 | `extensions/ugs` | Supply the loopback API and native held-jog extension. |
 
-The browser has five tool panels. Switching panels cancels a held movement.
-Only Machine controls accepts movement keys. Surface measurement accepts its explicit placement buttons.
-The Stop control remains visible across panels.
+The desktop shell has PCB preparation and Surface mapping workspaces, plus Camera,
+Connection and Session log utilities. Mapping separates area definition, grid
+planning and measurement. Movement keys work only during area definition.
+Switching workspaces or opening a utility cancels a held movement. Stop remains
+visible, including inside dialogs. Native Enter on inputs, buttons and disclosures
+cannot become a capture or readiness shortcut.
+
+Lit and Lucide provide local bundled UI components. Source and a pinned lockfile
+are in `scripts/cnc-map-ui`; `npm run build:ui` writes the shipped browser bundle.
+No build process or CDN is needed when using the app. `mapping-plan.js` is a
+view-only grid preview; server validation remains authoritative.
+
+`complete-rectangle` records only missing inferred corners after checking the
+presented bounds, stationary reference and raised Z. It never moves the machine.
+A completed scan requires accepted saved evidence and the height-map checksum;
+`ugs-handoff.json` records import instructions, not completed UGS import.
 
 The server binds to loopback. Browser requests require a session token and client identity.
 UGS also must bind to loopback. Redirects and proxy use are rejected by the read-only client.

@@ -23,9 +23,11 @@ try{
  if(!await page.locator('#checkConnection').isDisabled())throw Error('Old server version left controls enabled');
  await page.unroute('**/api/state');
  await page.waitForFunction(()=>document.querySelector('#error').hidden&&!document.querySelector('#checkConnection').disabled);
+ await page.locator('[data-utility=diagnostics]').click();
  await page.locator('#checkConnection').click();
  await page.waitForFunction(()=>document.querySelector('#health').textContent.includes('Demo · no machine access'));
- await page.locator('#cameraTab').click();
+ await page.locator('#closeUtility').click();
+ await page.locator('[data-utility=camera]').click();
  // Chrome provides a generated video stream: no physical camera is opened.
  await page.locator('#cameraStart').click();
  await page.waitForFunction(()=>document.querySelector('#cameraState').textContent==='LIVE');
@@ -49,23 +51,10 @@ try{
  await page.locator('#cameraStart').click();
  await page.waitForFunction(()=>document.querySelector('#cameraHelp').textContent.includes('permission was denied'));
  await page.evaluate(()=>{navigator.mediaDevices.getUserMedia=window.originalGetUserMedia;});
- await page.locator('#surfaceTab').click();
+ await page.locator('#closeUtility').click();
  await page.locator('#attest').check();
  await page.locator('#arm').click();
  await page.locator('#teach').waitFor({state:'visible'});
- // Hidden movement controls must not respond in another tool.
- const movementRequests=[];
- page.on('request',r=>{if(/\/api\/jog(?:$|-hold$)/.test(new URL(r.url()).pathname))movementRequests.push(r.url());});
- for(const tab of ['configTab','measureTab','cameraTab','pcbTab']){
-   await page.locator('#'+tab).click();await page.locator('h1').click();
-   const before=movementRequests.length;
-   await page.keyboard.press('ArrowRight');await page.waitForTimeout(100);
-   if(movementRequests.length!==before)throw Error('Hidden tool accepted a movement key: '+tab);
- }
- await page.locator('#configTab').click();
- if(!(await page.locator('#configValues').textContent()).includes('14 mm'))throw Error('Active configuration is missing');
- await page.locator('#surfaceTab').click();
-
  const heldRequests=[];
  page.on('request',r=>{if(r.url().endsWith('/api/jog-hold'))heldRequests.push(r.postDataJSON());});
  await page.locator('#speed').selectOption('maximum');
@@ -120,23 +109,22 @@ try{
  await page.waitForFunction(()=>document.querySelector('#operation').textContent==='teach');await capture('front-right');
  await page.locator('#corner').selectOption('back-left');await page.locator('#gotoCorner').click();
  await page.waitForFunction(()=>document.querySelector('#operation').textContent==='teach');await capture('back-left');
- await page.locator('#measureTab').click();
- await page.locator('#planning').waitFor({state:'visible'});
+ await page.locator('#toPlanning').waitFor({state:'visible'});
  await page.locator('#clickMove').check();
  const box=await page.locator('#plot').boundingBox();
  const beforeX=Number(await page.locator('#x').textContent()),beforeY=Number(await page.locator('#y').textContent());
- const centre=await page.locator('#plot').evaluate(svg=>{const p=svg.createSVGPoint();p.x=320;p.y=205;const q=p.matrixTransform(svg.getScreenCTM());return {x:q.x,y:q.y};});
+ const centre=await page.locator('#plot').evaluate(svg=>{const p=svg.createSVGPoint();p.x=320;p.y=205;const q=p.matrixTransform(svg.getScreenCTM());return {x:q.x,y:q.y,tolerance:1/(Math.abs(svg.getScreenCTM().d)*plotTransform.scale)};});
  await page.mouse.click(centre.x,centre.y);
  await page.waitForFunction(x=>Number(document.querySelector('#x').textContent)===x,beforeX+2.5);
  await page.waitForFunction(()=>document.querySelector('#operation').textContent==='teach');
- if(Math.abs(Number(await page.locator('#y').textContent())-(beforeY-2.5))>.025)throw Error('Map target transform incorrect: '+JSON.stringify({beforeX,beforeY,x:await page.locator('#x').textContent(),y:await page.locator('#y').textContent(),box}));
+ if(Math.abs(Number(await page.locator('#y').textContent())-(beforeY-2.5))>Math.max(.002,centre.tolerance))throw Error('Map target transform incorrect: '+JSON.stringify({beforeX,beforeY,x:await page.locator('#x').textContent(),y:await page.locator('#y').textContent(),box}));
  await page.mouse.click(box.x+10,box.y+10);
  await page.waitForFunction(()=>document.querySelector('#error').textContent.includes('inside the taught rectangle'));
- await page.locator('#surfaceTab').click();
  await page.locator('#corner').selectOption('back-left');await page.locator('#gotoCorner').click();
  await page.waitForFunction(x=>Number(document.querySelector('#x').textContent)===x,beforeX);
  await page.waitForFunction(()=>document.querySelector('#operation').textContent==='teach');
- await page.locator('#measureTab').click();
+ await page.locator('#toPlanning').click();
+ await page.locator('#planning').waitFor({state:'visible'});
  await page.locator('#spacing').fill('2.5');
  await page.locator('#preview').click();
  await page.locator('#planSummary').waitFor({state:'visible'});
@@ -156,16 +144,17 @@ try{
  }
  await page.locator('#finished').waitFor({state:'visible'});
  if(await page.locator('#scanProgress').getAttribute('value')!=='10')throw Error('Full progress not recorded');
+ await page.locator('[data-utility=diagnostics]').click();
  const downloaded=page.waitForEvent('download');
  await page.locator('#report').click();
  const report=JSON.parse(await readFile(await (await downloaded).path(),'utf8'));
  if(report.measurements.length!==10||!report.measurements.every(m=>m.simulated))throw Error('Demo report is not explicit about simulated readings');
  if(JSON.stringify(report).includes(url.split('#')[1]))throw Error('Session report leaked authentication token');
+ await page.locator('#closeUtility').click();
  await page.locator('#newMap').click();
  await page.locator('#setup').waitFor({state:'visible'});
  if(await page.locator('#attest').isChecked()||!await page.locator('#arm').isDisabled())throw Error('Fresh setup retained operator confirmation');
  if(!(await page.locator('#cornerTable').textContent()).includes('Not recorded'))throw Error('Fresh setup retained corners');
- await page.locator('#surfaceTab').click();
  await page.locator('#attest').check();await page.locator('#arm').click();
  await page.locator('#teach').waitFor({state:'visible'});
  // Enter on the Stop button must stop, never record a corner.
@@ -173,6 +162,30 @@ try{
  await page.locator('#recovery').waitFor({state:'visible'});
  await page.locator('#fresh').click();
  await page.locator('#setup').waitFor({state:'visible'});
+ await page.locator('#attest').check();await page.locator('#arm').click();
+ await page.locator('#teach').waitFor({state:'visible'});
+ await page.locator('summary').filter({hasText:'Enter selected corner'}).click();
+ const movement=[];page.on('request',r=>{if(/\/api\/(goto|jog|jog-hold)$/.test(r.url()))movement.push(r.url());});
+ for(const [corner,x,y] of [['front-left','0','0'],['back-right','10','10']]){
+   await page.locator('#corner').selectOption(corner);
+   await page.locator('#cornerX').fill(x);await page.locator('#cornerY').fill(y);
+   await page.locator('#saveCorner').click();
+   await page.waitForFunction(n=>state.corners.some(p=>p.name===n),corner);
+ }
+ await page.screenshot({path:path.join(artifacts,'suggested-corners.png'),fullPage:true});
+ // Suggestions take priority over movement, even when click-to-move is enabled.
+ await page.locator('#clickMove').check();
+ await page.locator('[data-suggested="front-right"]').click();
+ await page.waitForFunction(()=>state.corners.length===3);
+ await page.locator('[data-suggested="back-left"]').focus();
+ // A state refresh redraws SVG; keep keyboard focus on the same suggestion.
+ await page.evaluate(()=>render());
+ if(!await page.locator('[data-suggested="back-left"]').evaluate(e=>document.activeElement===e))throw Error('Refresh lost suggestion focus');
+ await page.keyboard.press('Enter');
+ await page.waitForFunction(()=>state.corners.length===4);
+ if(movement.length)throw Error('Accepting coordinates issued a movement');
+ if(await page.locator('[data-suggested]').count())throw Error('Accepted suggestions remain provisional');
+ if(!(await page.locator('#cornerTable').textContent()).includes('entered'))throw Error('Entered provenance missing');
  if(errors.length)throw Error(errors.join('\n'));
  console.log('Browser passed: diagnostics, camera start/stop/late permission/denial with fake video, arbitrary corners and opposite guidance, map click/rejection, held jog/release/blur, maximum speed, route/spacing/progress, single-use prompts, simulated report, fresh setup and keyboard Stop; no hardware.');
  await page.locator('#stop').click();

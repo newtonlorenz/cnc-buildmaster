@@ -17,3 +17,7 @@ This repository does not include compiled UGS binaries.
 `ws` uses the MIT licence. Playwright uses the Apache-2.0 licence.
 Their distributions contain their licence notices.
 `package-lock.json` records the dependency versions.
+
+The desktop UI bundles Lit and Lucide. Their licence text is retained in
+[scripts/cnc-map-ui/THIRD_PARTY_NOTICES.md](scripts/cnc-map-ui/THIRD_PARTY_NOTICES.md)
+and the generated bundle.

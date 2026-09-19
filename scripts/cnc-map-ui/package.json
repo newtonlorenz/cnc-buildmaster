@@ -1,0 +1,1 @@
+{"name":"surface-workbench-ui","private":true,"type":"module","scripts":{"build":"esbuild src/workbench.js --bundle --minify --format=iife --target=es2022 --outfile=../cnc-map-web/workbench.js --legal-comments=eof"},"dependencies":{"esbuild":"0.28.2","lit":"3.3.3","lucide":"1.47.0"},"devDependencies":{"linkedom":"0.18.13"}}

@@ -12,9 +12,9 @@ The app opens in your browser and runs on your own computer.
 It is an early open-source project for desktop CNC users, with a focus on printed circuit boards (PCBs).
 You can explore the demo without a machine.
 
-[Try the demo](#try-it-without-a-machine) · [What it does](#five-tools-one-workspace) · [Machine setup](#use-your-own-machine) · [Report a problem](https://github.com/newtonlorenz/cnc-buildmaster/issues)
+[Try the demo](#try-it-without-a-machine) · [What it does](#tools-in-the-workbench) · [Machine setup](#use-your-own-machine) · [Report a problem](https://github.com/newtonlorenz/cnc-buildmaster/issues)
 
-![CNC Buildmaster in demo mode, with separate tool tabs, a measurement grid, the planned route and a visible Stop control.](docs/images/surface-measurement.png)
+![CNC Buildmaster in demo mode, with a desktop workbench, a measurement grid, the planned route and a visible Stop control.](docs/images/surface-measurement.png)
 
 *The real app in demo mode. The grid and coordinates are simulated. No machine was connected for this screenshot.*
 
@@ -30,15 +30,24 @@ The work stays visible: cutting paths, material boundaries, alignment points and
 You can save a job package and return to its files later.
 Saved files do not restore a valid physical machine reference.
 
-## Five tools, one workspace
+## Tools in the workbench
 
 | Tool | What you can do |
 | --- | --- |
-| **Job preparation** | Open cutting files, view their paths on the material, assign cutters and align the job with reference points. |
-| **Machine controls** | Move the cutter in controlled steps, read its position and record the corners of the measurement area. |
-| **Surface measurement** | Preview a grid and measure its points with a small conductive touch plate, called a puck. |
-| **Camera** | See a local camera view beside your work. The camera does not measure position or control movement. |
-| **Configuration** | See the selected machine details, puck height and movement speeds. Each machine uses its own configuration file. |
+| **PCB preparation** | Open cutting files, view their paths on the material, assign cutters and align the job with reference points. |
+| **Surface mapping** | Define the area, plan the grid and measure the surface. Jog controls and measurement prompts stay in separate steps. |
+| **Camera** | Open a local live view. The camera does not measure position or control movement. |
+| **Connection** | Check UGS and inspect your configured machine, puck height and permitted speeds. |
+| **Session log** | Inspect recent events and saved-file details. |
+
+The desktop layout keeps the work area beside the controls. Appearance follows
+your operating system, with Light and Dark overrides. Use **Cmd/Ctrl+K** to find a
+tool. Stop and machine coordinates remain visible on small screens.
+
+For a rectangular map, record two opposite corners and check the two inferred
+corners. Accept both in one action without travelling to them. Grid presets show
+the exact placement count, including the return check. Wider spacing saves
+placements but can miss surface variation; choose it for the cutting job.
 
 During measurement, you place the puck at each point and tell the app when you are ready.
 The machine takes two contacts, lifts the cutter and travels to the next point.
@@ -91,8 +100,8 @@ npm ci
 `npm ci` downloads the software dependencies. The second command starts the demo.
 
 8. Copy the local web address from Terminal into your browser.
-9. In **Job preparation**, select **Load rectangle example**.
-10. Explore the separate tool tabs.
+9. In **PCB preparation**, select **Load rectangle example**.
+10. Explore the workspaces and utilities in the navigation.
 
 The demo does not send commands to UGS. Its simulated measurements cannot become a machine height map.
 Camera access starts only after you select **Enable camera** and grant browser permission.
@@ -191,6 +200,10 @@ Specific setup details and reproducible reports help define that work.
 npm ci
 npm test
 npm run test:browser
+
+# After changing UI components:
+npm ci --prefix scripts/cnc-map-ui
+npm run build:ui
 ```
 
 The browser checks need an installed Google Chrome.

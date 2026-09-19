@@ -21,6 +21,22 @@ These local build files remain outside Git.
 If a stock class hash differs, stop and review compatibility before another build.
 Do not replace the recorded hashes merely to accept another version.
 
+## Offline held-jog check
+
+```sh
+JAVA_HOME=/path/to/jdk python3 tests/test_ugs_held_jog.py -v
+```
+
+This compiles the extension against the compatible UGS libraries and exercises a
+fake controller in a temporary directory. It does not connect to or start UGS.
+Without a suitable JDK or local UGS distribution, the test reports a skip; the
+browser and Node tests still run independently. Existing extension installations
+need a separately reviewed rebuild and UGS restart to load source changes.
+
+The cancellation logic sends one cancel after acknowledgement. A release that
+arrives earlier sends an immediate cancel and one more after acknowledgement,
+then waits for a fresh stopped report. It does not repeatedly flood the sender.
+
 ## Configure UGS startup
 
 Close UGS before you change its startup configuration.

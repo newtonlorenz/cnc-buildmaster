@@ -5,6 +5,7 @@ import base64
 import copy
 from collections import deque
 import json
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -15,11 +16,11 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
+from surface_config import load_config
 
-from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, save_plan, positioning_rectangle, finite
+from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, save_plan, positioning_rectangle, taught_rectangle, finite
 from cnc_map_support import fault_details, scan_route, corner_issue
 from pcb_workspace import Workspace
-from surface_config import load_config
 
 ASSETS = Path(__file__).with_name('cnc-map-web')
 
@@ -59,7 +60,7 @@ class Controller:
         self.speeds = {name: {a: min(maxima[a], rate[i]) for i,a in enumerate('xyz')} for name,rate in
                        {'slow': (100,100,10), 'normal': (600,600,60), 'fast': (1000,1000,100), 'maximum': (maxima['x'],maxima['y'],maxima['z'])}.items()}
         self.data.update(speeds=self.speeds, hold=None, nativeJog=demo, area=None,
-                         configuration={'name': self.profile['name'], 'puckHeight': self.profile['puckHeight'], 'ugsPort': self.profile['ugsPort'], 'feeds': self.profile['feeds']}, apiVersion=3, sessionId=secrets.token_hex(16), fault=None, diagnostics=None,
+                         configuration={'name': self.profile['name'], 'puckHeight': self.profile['puckHeight'], 'ugsPort': self.profile['ugsPort'], 'feeds': self.profile['feeds']}, apiVersion=6, sessionId=secrets.token_hex(16), fault=None, diagnostics=None,
                          geometryIssue=None, route=None, planId=None, scanStarted=None)
         threading.Thread(target=self.watchdog, daemon=True).start()
 
@@ -323,6 +324,7 @@ class Controller:
         env = dict(os.environ, UGS_MAP_WEB_TOKEN=self.token)
         failure_reason = None
         last_diagnostic = None
+        scan_result = None
         with self.lock:
             if self.stopped:
                 raise ValueError('Session stopped; start a fresh setup after inspection')
@@ -348,7 +350,10 @@ class Controller:
                     elif kind == 'status': self.data['status']=event['status']
                     elif kind == 'point': self.data['currentPoint']=event
                     elif kind == 'measurement': self.data['measurements'].append(event['record'])
-                    elif kind == 'result': self.data['result']=event
+                    elif kind == 'result':
+                        if scan_result is not None:
+                            failure_reason = 'Duplicate scan result from worker'
+                        scan_result = event
                     elif kind == 'failure':
                         failure_reason = str(event.get('error', 'Runner failed'))
                         self.log(failure_reason)
@@ -369,6 +374,30 @@ class Controller:
                 self.child = None
         if self.stopped:
             raise ValueError('Session stopped; reference must be checked again')
+        if failure_reason:
+            raise ValueError(failure_reason)
+        if scan:
+            if not scan_result:
+                raise ValueError('Scan ended without a saved, accepted height map')
+            result_path = Path(scan_result.get('path', '')).resolve()
+            evidence_root = Path(self.profile['dataDir']).resolve()
+            if not result_path.is_relative_to(evidence_root) or result_path.name != 'surface.xyz':
+                raise ValueError('Scan result is outside the machine evidence directory')
+            saved = json.loads(result_path.with_name('result.json').read_text())
+            handoff = json.loads(result_path.with_name('ugs-handoff.json').read_text())
+            if handoff.get('sha256') != hashlib.sha256(result_path.read_bytes()).hexdigest():
+                raise ValueError('Saved height map does not match its handoff checksum')
+            summary = scan_result.get('summary')
+            if not isinstance(summary, dict) or any(saved.get(k) != v for k, v in summary.items()):
+                raise ValueError('Saved height map summary differs from worker result')
+            if (saved.get('physicalObservationConfirmed') is not True or
+                    saved.get('offsetsPreserved') is not True or saved.get('appliedInUgs') is not False or
+                    not result_path.read_text().strip()):
+                raise ValueError('Scan result is incomplete or has unverified acceptance')
+            with self.lock:
+                if self.stopped:
+                    raise ValueError('Session stopped before accepting the saved map')
+                self.data['result'] = scan_result
 
     def hold_control(self, action, body):
         hold_id=body.get('id')
@@ -456,8 +485,10 @@ class Controller:
                     else:
                         self.log('Waiting for UGS status to match the controller’s actual work reference…')
                         result=subprocess.run(['node',str(ROOT/'scripts/ugs_map_reference.mjs')],cwd=ROOT,text=True,capture_output=True,timeout=20)
+                        if result.stderr.strip():
+                            self.log(result.stderr.strip())
                         if result.returncode:
-                            raise ValueError(result.stderr.strip() or 'UGS reference check failed')
+                            raise ValueError(result.stderr.strip().splitlines()[-1] or 'UGS reference check failed')
                         self.expected=json.loads(result.stdout)
                         self.data['status']=self.expected['status']
                     if self.stopped:
@@ -569,15 +600,73 @@ class Controller:
                     except Exception as e:self.stop(str(e))
                     finally:self.data['busy']=False
                 threading.Thread(target=move_to,daemon=True).start()
-            elif action == 'capture':
+            elif action == 'complete-rectangle':
+                if self.data['phase'] != 'teach':
+                    raise ValueError('Cannot complete the rectangle during a scan')
+                area = positioning_rectangle(self.snapshots)
+                presented = body.get('area')
+                if (not isinstance(presented, dict) or set(presented) != {'x', 'y'} or
+                    any(not isinstance(presented[a], list) or len(presented[a]) != 2 or
+                        any(type(v) not in (int, float) or v != bound
+                            for v, bound in zip(presented[a], area[a])) for a in 'xy')):
+                    raise ValueError('The rectangle preview changed. Review the current area before completing it.')
+                s = self.checked()
+                current, offset = position(s)
+                first = next(iter(self.snapshots.values()))
+                taught, taught_offset = position(first)
+                if current['z'] != taught['z']:
+                    raise ValueError('Keep the same raised Z at every corner')
+                if offset != taught_offset or s['listener'] != first['listener']:
+                    raise ValueError('Taught reference changed; teach again')
+                # Stage inferred corners without altering the captures or live status.
+                completed = self.snapshots.copy()
+                for name in CORNERS:
+                    if name in completed:
+                        continue
+                    inferred = copy.deepcopy(s)
+                    front_back, left_right = name.split('-')
+                    for axis, index in (('x', int(left_right == 'right')), ('y', int(front_back == 'back'))):
+                        value = area[axis][index]
+                        work_offset = s['status']['machineCoord'][axis] - s['status']['workCoord'][axis]
+                        inferred['status']['machineCoord'][axis] = value
+                        inferred['status']['workCoord'][axis] = value - work_offset
+                    inferred['cornerSource'] = 'inferred'
+                    completed[name] = inferred
+                if taught_rectangle(completed) != area:
+                    raise ValueError('Completed corners do not match the taught rectangle')
+                corners = [dict(name=name, source=completed[name].get('cornerSource', 'captured'),
+                                **position(completed[name])[0]) for name in CORNERS]
+                with self.lock:
+                    # Stop and the watchdog can run while checked() is in progress.
+                    if self.stopped or not self.data['armed'] or self.data['phase'] != 'teach' or self.data['busy']:
+                        raise ValueError('Session stopped or teaching is no longer idle')
+                    self.snapshots = completed
+                    self.data.update(corners=corners, area=area, geometryIssue=None)
+                    self.invalidate_plan()
+            elif action in ('capture', 'corner-entry'):
                 if self.data['phase'] != 'teach':raise ValueError('Cannot capture during a scan')
                 name=body.get('corner') or next((n for n in CORNERS if n not in self.snapshots),None)
                 if name not in CORNERS:raise ValueError('Select a named corner')
                 s=self.checked()
                 if self.snapshots and position(s)[0]['z']!=position(next(iter(self.snapshots.values())))[0]['z']:
                     raise ValueError('Keep the same raised Z at every corner')
+                s=copy.deepcopy(s)
+                if action == 'corner-entry':
+                    for axis in ('x','y'):
+                        value=body.get(axis)
+                        if isinstance(value,bool) or not isinstance(value,(int,float)):
+                            raise ValueError('Enter numeric machine X and Y in millimetres')
+                        value=finite(value)
+                        if abs(value)>10000 or abs(value*1000-round(value*1000))>1e-6:
+                            raise ValueError('Coordinates must be within 10000 mm and use at most three decimals')
+                        offset=s['status']['machineCoord'][axis]-s['status']['workCoord'][axis]
+                        s['status']['machineCoord'][axis]=value
+                        s['status']['workCoord'][axis]=value-offset
+                    s['cornerSource']='entered'
+                else:
+                    s['cornerSource']='captured'
                 self.snapshots[name]=s
-                self.data['corners']=[dict(name=name,**position(self.snapshots[name])[0]) for name in CORNERS if name in self.snapshots]
+                self.data['corners']=[dict(name=name,source=self.snapshots[name].get('cornerSource','captured'),**position(self.snapshots[name])[0]) for name in CORNERS if name in self.snapshots]
                 self.invalidate_plan();self.data.update(area=None, geometryIssue=corner_issue(self.data['corners']))
                 try:self.data['area']=positioning_rectangle(self.snapshots)
                 except ValueError as e:
@@ -696,7 +785,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/pcb':
                 self.send(200, self.server.controller.pcb_state())
                 return
-            asset = {'/': ('index.html','text/html; charset=utf-8'), '/app.js': ('app.js','text/javascript'), '/pcb.js': ('pcb.js','text/javascript'), '/camera.js': ('camera.js','text/javascript'), '/style.css': ('style.css','text/css')}.get(self.path)
+            asset = {'/': ('index.html','text/html; charset=utf-8'), '/app.js': ('app.js','text/javascript'), '/pcb.js': ('pcb.js','text/javascript'), '/camera.js': ('camera.js','text/javascript'), '/style.css': ('style.css','text/css'), '/workbench.js': ('workbench.js','text/javascript')}.get(self.path)
             if not asset:
                 self.send(404, {'error':'Not found'}); return
             self.send(200, (ASSETS/asset[0]).read_bytes(), asset[1])

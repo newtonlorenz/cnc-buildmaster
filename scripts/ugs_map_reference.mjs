@@ -9,8 +9,8 @@ import {parseEvent,parseOffsets} from './ugs_puck_map.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const ensure=(ok,message)=>{if(!ok)throw Error(message);};
 const near=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=.0051;
-export async function settleReference({WebSocketClass,request,snapshot,pause=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now}){
-  const initial=await snapshot();let ws,failure=null,commandId=null,offsets=null;
+export async function settleReference({WebSocketClass,request,snapshot,pause=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now,log=()=>{}}){
+  const initial=await snapshot();let ws,failure=null,commandId=null,offsets=null,lastStatus=null;
   const checked=s=>{
     ensure(s.state==='IDLE'&&s.spindleSpeed===0&&s.feedSpeed===0&&!s.fileName&&!s.remainingRowCount,'Wait for UGS to be connected and stopped');
     ensure(s.machineCoord.units==='MM'&&s.workCoord.units==='MM','Expected MM');
@@ -26,10 +26,10 @@ export async function settleReference({WebSocketClass,request,snapshot,pause=ms=
       if(v.eventType==='CommandEvent'){
         const c=e.command;
         if(e.commandEventType==='COMMAND_SENT'){
-          ensure(c.command.trim()==='$#'&&commandId===null&&Number.isInteger(c.id),'Concurrent command during reference startup');commandId=c.id;
+          ensure(c.command.trim()==='$#'&&commandId===null&&Number.isInteger(c.id),'Concurrent command during reference startup');commandId=c.id;log({kind:"referenceSent",commandId});
         }else if(e.commandEventType==='COMMAND_COMPLETE'){
-          ensure(c.id===commandId&&c.command.trim()==='$#'&&c.isOk===true&&!c.isError&&!c.isSkipped&&!offsets,'Reference query failed');
-          offsets=parseOffsets(c.response);
+          ensure(commandId!==null&&c.id===commandId&&c.command.trim()==='$#'&&c.isOk===true&&!c.isError&&!c.isSkipped&&!offsets,'Reference query failed');
+          offsets=parseOffsets(c.response);log({kind:"referenceAcknowledged",commandId,g54:offsets.G54});
         }
       }
     }catch(e){failure=e;}});
@@ -42,7 +42,7 @@ export async function settleReference({WebSocketClass,request,snapshot,pause=ms=
     const deadline=now()+8000;let matching=0;
     while(now()<deadline){
       if(failure)throw failure;
-      const s=await request('status/getStatus');checked(s);
+      const s=await request('status/getStatus');checked(s);lastStatus=s;
       if(offsets){
         ensure(offsets.G92.every(n=>n===0)&&offsets.TLO[0]===0,'Unexpected temporary/tool offset');
         const matches=['x','y','z'].every((a,i)=>near(s.machineCoord[a]-s.workCoord[a],offsets.G54[i]));
@@ -58,7 +58,11 @@ export async function settleReference({WebSocketClass,request,snapshot,pause=ms=
       }
       await pause(150);
     }
-    throw Error('UGS status has not matched its actual G54 offset; wait for connection startup');
+    const diagnostic={commandId,sent:commandId!==null,acknowledged:offsets!==null,
+      actualG54:offsets?.G54??null,observedOffset:lastStatus?['x','y','z'].map(a=>lastStatus.machineCoord[a]-lastStatus.workCoord[a]):null};
+    log({kind:'referenceTimeout',...diagnostic});
+    const reason=commandId===null?'UGS did not send the reference query':!offsets?'UGS did not acknowledge the reference query':'UGS status has not matched the acknowledged G54 offset';
+    throw Error(reason+'; no retry was attempted. '+JSON.stringify(diagnostic));
   }finally{
     if(ws){ws.removeAllListeners();ws.on('error',()=>{});ws.terminate();}
   }
@@ -71,6 +75,6 @@ async function main(){
   const response=await fetch(apiBase+route,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,redirect:'error',signal:AbortSignal.timeout(3000)});
   ensure(response.ok,'UGS reference query HTTP '+response.status);const text=await response.text();return text?parseEvent(text):null;
  };
- console.log(JSON.stringify(await settleReference({WebSocketClass,request,snapshot})));
+ console.log(JSON.stringify(await settleReference({WebSocketClass,request,snapshot,log:event=>console.error(JSON.stringify(event))})));
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(e=>{console.error(e.message);process.exitCode=1;});

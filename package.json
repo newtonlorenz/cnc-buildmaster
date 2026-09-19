@@ -8,8 +8,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -p \"test_*.py\" && node --test tests/test_ugs_*.mjs",
-    "test:browser": "node tests/smoke_cnc_map_web.mjs && node tests/smoke_pcb_workbench.mjs"
+    "test": "python3 -m unittest discover -s tests -p \"test_*.py\" && node --test tests/test_ugs_*.mjs tests/test_mapping_plan.mjs",
+    "test:browser": "node tests/smoke_cnc_map_web.mjs && node tests/smoke_pcb_workbench.mjs && node tests/smoke_workbench_desktop.mjs && node tests/smoke_mapping_efficiency.mjs",
+    "build:ui": "npm run --prefix scripts/cnc-map-ui build"
   },
   "dependencies": {
     "ws": "^8.18.3"
