@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+node_modules/
+.runtime/
+data/
+config/*.json
+!config/example.json
+config/data/
+output/
+.env*
+.DS_Store
+extensions/ugs/*.jar
+extensions/ugs/patch-hashes.json
+*.pcb-job.json
+*.jsonl
+*.log

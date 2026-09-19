@@ -1,0 +1,66 @@
+{
+  "note": "Sanitised protocol regression fixture. Acknowledgement precedes position change.",
+  "start": {
+    "machineCoord": {
+      "x": 100,
+      "y": 1,
+      "z": -4.754,
+      "a": "NaN",
+      "b": "NaN",
+      "c": "NaN",
+      "units": "MM"
+    },
+    "workCoord": {
+      "x": 100,
+      "y": 1,
+      "z": 10.999,
+      "a": "NaN",
+      "b": "NaN",
+      "c": "NaN",
+      "units": "MM"
+    },
+    "feedSpeed": 0,
+    "spindleSpeed": 0,
+    "state": "IDLE",
+    "rowCount": 0,
+    "completedRowCount": 0,
+    "remainingRowCount": 0,
+    "fileName": "",
+    "sendDuration": 0,
+    "sendRemainingDuration": -1
+  },
+  "command": "G90 G21 G94 G54 G1 X100.000 Y0.000 Z10.999 F600.000",
+  "events": [
+    "{\"eventType\":\"CommandEvent\",\"event\":{\"commandEventType\":\"COMMAND_SENT\",\"command\":{\"id\":281,\"command\":\"G90 G21 G94 G54 G1 X100.000 Y0.000 Z10.999 F600.000\",\"commandNum\":-1,\"comment\":\"\",\"isGenerated\":true,\"isSent\":true,\"isOk\":false,\"isError\":false,\"isSkipped\":false,\"isDone\":false,\"isTemporaryParserModalChange\":false,\"isImmediate\":true}}}",
+    "{\"eventType\":\"CommandEvent\",\"event\":{\"commandEventType\":\"COMMAND_COMPLETE\",\"command\":{\"id\":281,\"command\":\"G90 G21 G94 G54 G1 X100.000 Y0.000 Z10.999 F600.000\",\"commandNum\":-1,\"comment\":\"\",\"isGenerated\":true,\"response\":\"ok\",\"isSent\":true,\"isOk\":true,\"isError\":false,\"isSkipped\":false,\"isDone\":true,\"isTemporaryParserModalChange\":false,\"isImmediate\":true}}}"
+  ],
+  "staleStatus": {
+    "machineCoord": {
+      "x": 100,
+      "y": 1,
+      "z": -4.754,
+      "a": "NaN",
+      "b": "NaN",
+      "c": "NaN",
+      "units": "MM"
+    },
+    "workCoord": {
+      "x": 100,
+      "y": 1,
+      "z": 10.999,
+      "a": "NaN",
+      "b": "NaN",
+      "c": "NaN",
+      "units": "MM"
+    },
+    "feedSpeed": 0,
+    "spindleSpeed": 0,
+    "state": "IDLE",
+    "rowCount": 0,
+    "completedRowCount": 0,
+    "remainingRowCount": 0,
+    "fileName": "",
+    "sendDuration": 0,
+    "sendRemainingDuration": -1
+  }
+}

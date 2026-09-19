@@ -1,0 +1,20 @@
+{
+  "name": "cnc-buildmaster",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local CNC job preparation and supervised surface measurement.",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -p \"test_*.py\" && node --test tests/test_ugs_*.mjs",
+    "test:browser": "node tests/smoke_cnc_map_web.mjs && node tests/smoke_pcb_workbench.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}

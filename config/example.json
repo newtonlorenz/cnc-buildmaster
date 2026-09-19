@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "Example machine \u2014 simulation only",
+  "configured": false,
+  "ugsPort": 8080,
+  "ugsApp": "/Applications/Universal Gcode Sender.app",
+  "dataDir": "data",
+  "machine": {
+    "connection": {
+      "port": "/dev/cu.REPLACE_ME",
+      "baud": 115200
+    },
+    "sender_defaults": {
+      "firmware": "GRBL"
+    }
+  },
+  "baseline": {
+    "110": "100",
+    "111": "100",
+    "112": "10"
+  },
+  "puckHeight": 14,
+  "feeds": {
+    "xy": 100,
+    "z": 10,
+    "first": 10,
+    "second": 5
+  }
+}

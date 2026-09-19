@@ -1,0 +1,8 @@
+{
+  "ext/com.willwinder.ugs-platform-ugslib/com-willwinder-universalgcodesender/ugs-core.jar": {
+    "com/willwinder/universalgcodesender/GrblController.class": "5712e7a9cbbdda841b54f7febd4393be31f3c51a4d087251cc85389b51a61110",
+    "com/willwinder/universalgcodesender/AbstractController.class": "de629cfe34c599a651020a4e63a1ecf6c67c834ce41936b2763381948c27f5c4",
+    "com/willwinder/universalgcodesender/gcode/util/GcodeUtils.class": "373836a2d9f98203d90bf19a7a8f05cd5c9fdc18c7e5f3af4c2abbf0ca49f0be",
+    "com/willwinder/universalgcodesender/communicator/AbstractCommunicator.class": "4e39b19931e267a2dcbaf560d04768d8936b958919bb7facbbc60b3932ec311c"
+  }
+}
