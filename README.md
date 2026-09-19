@@ -1,66 +1,209 @@
 # CNC Buildmaster
 
-CNC Buildmaster is a local web application for CNC job preparation and supervised surface measurement.
-UGS owns the serial connection. CNC Buildmaster communicates with the local UGS API.
+**See the cutting paths. Position the cutter. Measure the surface.**
 
-## Tools
+[![Offline checks](https://github.com/newtonlorenz/cnc-buildmaster/actions/workflows/test.yml/badge.svg)](https://github.com/newtonlorenz/cnc-buildmaster/actions/workflows/test.yml)
+[![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
 
-| Tool | Function |
+CNC Buildmaster gives you a visual workspace for the steps before a CNC cut.
+You can inspect cutting files, position them on your material, and measure changes in surface height.
+The app opens in your browser and runs on your own computer.
+
+It is an early open-source project for desktop CNC users, with a focus on printed circuit boards (PCBs).
+You can explore the demo without a machine.
+
+[Try the demo](#try-it-without-a-machine) · [What it does](#five-tools-one-workspace) · [Machine setup](#use-your-own-machine) · [Report a problem](https://github.com/newtonlorenz/cnc-buildmaster/issues)
+
+![CNC Buildmaster in demo mode, with separate tool tabs, a measurement grid, the planned route and a visible Stop control.](docs/images/surface-measurement.png)
+
+*The real app in demo mode. The grid and coordinates are simulated. No machine was connected for this screenshot.*
+
+## Why use it?
+
+A cutting file describes where a CNC machine must move.
+It does not tell you whether your material is in the right place or whether its surface is level.
+
+For example, a small height difference can affect a shallow cut in a circuit board.
+CNC Buildmaster helps you inspect the planned job and measure the surface before you continue in your cutting software.
+
+The work stays visible: cutting paths, material boundaries, alignment points and the measurement route.
+You can save a job package and return to its files later.
+Saved files do not restore a valid physical machine reference.
+
+## Five tools, one workspace
+
+| Tool | What you can do |
 | --- | --- |
-| Job preparation | Import G-code, inspect stock placement, assign cutters, align references and export a draft. |
-| Machine controls | Read connection status, jog the cutter and record the measurement corners. |
-| Surface measurement | Preview the grid and measure each point with a manually placed conductive puck. |
-| Camera | Show a local camera view. The view has no position calibration. |
-| Configuration | Show the machine configuration in use. |
+| **Job preparation** | Open cutting files, view their paths on the material, assign cutters and align the job with reference points. |
+| **Machine controls** | Move the cutter in controlled steps, read its position and record the corners of the measurement area. |
+| **Surface measurement** | Preview a grid and measure its points with a small conductive touch plate, called a puck. |
+| **Camera** | See a local camera view beside your work. The camera does not measure position or control movement. |
+| **Configuration** | See the selected machine details, puck height and movement speeds. Each machine uses its own configuration file. |
 
-The application does not generate isolation paths from Gerbers or send cutting jobs.
-Automatic copper scanning is not available. Height compensation is not applied to exported G-code.
+During measurement, you place the puck at each point and tell the app when you are ready.
+The machine takes two contacts, lifts the cutter and travels to the next point.
+You stay at the machine throughout the process.
 
-## Start the simulation
+## Where it fits
 
-Python 3.11 or later and Node.js 22 or later are required.
-The process manager also uses `lsof` and POSIX process tools.
-The current machine integration targets macOS, UGS Platform 2.1.26 and GRBL 1.1.
-Other operating systems and controllers are not qualified.
+**Design → create cutting files → prepare and measure in CNC Buildmaster → inspect and cut in UGS**
+
+- **CAD** software creates the design.
+- **CAM** software converts the design into cutting instructions, usually a G-code file.
+- **CNC Buildmaster** helps you prepare those files and inspect the physical setup.
+- **Universal Gcode Sender (UGS)** connects to the machine and sends the cutting job.
+
+CNC Buildmaster uses UGS for its machine connection.
+It does not replace your design software or generate cutting paths from a circuit-board design.
+It does not send cutting jobs, scan copper automatically, or apply height correction to exported cutting files.
+
+An exported cutting file is a **draft for inspection in UGS**, not an approved machining job.
+
+## Try it without a machine
+
+The demo includes a rectangle example, simulated movement and simulated surface measurements.
+You do not need UGS or a connected CNC machine to explore it.
+
+### What you need
+
+- A Mac for the currently supported setup.
+- [Python](https://www.python.org/downloads/) 3.11 or later.
+- [Node.js](https://nodejs.org/en/download) 22 or later, which includes `npm`.
+- A web browser.
+
+There is no packaged installer yet. The first setup uses Terminal, the macOS app for text commands.
+
+### Open the demo
+
+1. Download the project with GitHub's **Code → Download ZIP** button.
+2. Extract the ZIP file.
+3. Open Terminal.
+4. Type `cd `, including the space.
+5. Drag the extracted project folder into Terminal.
+6. Press Return.
+7. Enter these commands, one at a time:
 
 ```sh
 npm ci
 ./cnc-map start --demo
 ```
 
-Open the address that appears in the terminal.
-The simulation does not access UGS or a physical camera unless you enable the Camera tool.
-Simulated measurements cannot become a machine height map.
+`npm ci` downloads the software dependencies. The second command starts the demo.
+
+8. Copy the local web address from Terminal into your browser.
+9. In **Job preparation**, select **Load rectangle example**.
+10. Explore the separate tool tabs.
+
+The demo does not send commands to UGS. Its simulated measurements cannot become a machine height map.
+Camera access starts only after you select **Enable camera** and grant browser permission.
+
+To stop the demo, enter this command in the same project folder:
 
 ```sh
-./cnc-map status
 ./cnc-map stop
 ```
 
-## Configure a machine
-
-1. Read [Configuration](docs/CONFIGURATION.md).
-2. Complete a local configuration file from `config/example.json`.
-3. Read [UGS extension](docs/UGS.md).
-4. Establish the physical setup described in [Operation](docs/OPERATION.md).
-
-The example configuration cannot enable machine mode.
-A successful software check does not establish a surface reference or prove physical clearance.
-
-## Development
+<details>
+<summary>Already familiar with Git?</summary>
 
 ```sh
+git clone https://github.com/newtonlorenz/cnc-buildmaster.git
+cd cnc-buildmaster
+npm ci
+./cnc-map start --demo
+```
+
+</details>
+
+## Use your own machine
+
+**Current machine integration: macOS, UGS Platform 2.1.26 and GRBL 1.1.**
+GRBL is the software inside the supported machine controller.
+Windows, Linux and other controllers need further integration and testing.
+
+Machine setup currently needs more technical work than the demo.
+It includes a machine configuration file and a compatibility-checked UGS extension, built with a Java development kit.
+The extension provides the local connection and controlled hold-to-move commands.
+
+1. Read the [configuration guide](docs/CONFIGURATION.md).
+2. Enter your connection details, measured puck height and permitted speeds.
+3. Complete the [UGS extension setup](docs/UGS.md).
+4. Read the [operation guide](docs/OPERATION.md) before machine use.
+
+The supplied example configuration cannot enable real machine control.
+A different machine needs its own measured values and physical checks.
+
+**Keep the physical stop within reach.** The browser Stop control depends on the software connection.
+Software checks do not prove tool clearance, electrical safety or cutting accuracy.
+
+## Common questions
+
+**Does it need an account or cloud service?**
+
+No account or cloud service is required for app operation. The app and UGS connection stay on your computer.
+The initial dependency installation needs internet access.
+
+**Does the camera record or upload video?**
+
+No. The camera image stays in your browser.
+Its crosshair is a visual aid, not a calibrated measurement.
+
+**Which files can I open?**
+
+Supported G-code files use `.nc`, `.gcode`, `.ngc`, `.tap` or `.cnc` extensions.
+The command reader accepts a limited GRBL subset. A supported extension does not guarantee that every command is supported.
+You can also reopen a saved job package.
+
+**Can I change the configuration for my setup?**
+
+Yes. The connection, puck height, movement speeds and storage location are configurable.
+The [configuration guide](docs/CONFIGURATION.md) explains the fields and limits.
+
+**Is it ready for unattended operation?**
+
+No. Surface measurement needs an operator at the machine and manual puck placement.
+This is an early project. Automated tests do not qualify a physical machine or cutting process.
+
+## Documentation
+
+- [Configuration](docs/CONFIGURATION.md) — machine details, speeds and storage.
+- [UGS extension](docs/UGS.md) — connection setup and compatibility checks.
+- [Operation](docs/OPERATION.md) — job preparation, movement and surface measurement.
+- [Architecture](docs/ARCHITECTURE.md) — how the software components fit together.
+
+## Get involved
+
+You do not need to write code to contribute.
+A clear problem report, a confusing label or a better explanation can improve the project.
+
+- [Report a problem or suggest a feature](https://github.com/newtonlorenz/cnc-buildmaster/issues).
+- Include your operating system, app version, expected result and actual result.
+- Remove personal paths, credentials and private job files before you share a report.
+- Read [Contributing](CONTRIBUTING.md) before a code change or pull request.
+
+There are no promised dates for additional operating systems or controllers.
+Specific setup details and reproducible reports help define that work.
+
+<details>
+<summary>Development and automated checks</summary>
+
+```sh
+npm ci
 npm test
 npm run test:browser
 ```
 
-The browser tests use an installed Google Chrome and simulated machine data.
-They use a generated camera image. They do not move a machine.
+The browser checks need an installed Google Chrome.
+Tests use simulated machine data and a generated camera image. They do not move a machine.
 
-See [Architecture](docs/ARCHITECTURE.md) for module responsibilities.
-See [Contributing](CONTRIBUTING.md) for change requirements.
+[View the automated check results](https://github.com/newtonlorenz/cnc-buildmaster/actions/workflows/test.yml).
 
-## Licence
+</details>
 
-GPL-3.0-or-later. See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).
-The UGS extension contains modified UGS source with its original copyright notices.
+## License and acknowledgments
+
+CNC Buildmaster uses **GPL-3.0-or-later**. See the [license](LICENSE) for use, modification and distribution terms.
+
+The machine integration builds on [Universal Gcode Sender](https://github.com/winder/Universal-G-Code-Sender).
+Modified UGS source retains its original copyright notices.
+See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency information.
