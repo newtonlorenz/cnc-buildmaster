@@ -368,7 +368,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(web.fault_details('Controller report stalled')['title'],'Session stopped')
 
     def test_http_requires_object_generation_and_authenticated_report(self):
-        server=web.ThreadingHTTPServer(('127.0.0.1',0),web.Handler);server.controller=self.c
+        server=web.LocalHTTPServer(('127.0.0.1',0),web.Handler);server.controller=self.c
         server.host_header=f'127.0.0.1:{server.server_port}'
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         def request(method,path,body=None,auth=True):
@@ -399,7 +399,7 @@ class WebTests(unittest.TestCase):
         finally:server.shutdown();server.server_close();thread.join()
 
     def test_http_rejects_cross_origin_bad_host_and_no_token(self):
-        server=web.ThreadingHTTPServer(('127.0.0.1',0),web.Handler);server.controller=self.c
+        server=web.LocalHTTPServer(('127.0.0.1',0),web.Handler);server.controller=self.c
         server.host_header=f'127.0.0.1:{server.server_port}'
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
@@ -622,7 +622,7 @@ class RectangleCompletionTests(unittest.TestCase):
 
     def test_http_completion_requires_current_session_and_preserves_actual_position(self):
         self.record()
-        server = web.ThreadingHTTPServer(('127.0.0.1', 0), web.Handler)
+        server = web.LocalHTTPServer(('127.0.0.1', 0), web.Handler)
         server.controller = self.c
         server.host_header = f'127.0.0.1:{server.server_port}'
         thread = threading.Thread(target=server.serve_forever, daemon=True)
