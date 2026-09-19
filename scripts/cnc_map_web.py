@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 
 from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, save_plan, positioning_rectangle, finite
 from cnc_map_support import fault_details, scan_route, corner_issue
@@ -727,13 +728,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {'error':str(e)})
 
 
+class LocalHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer resolves the numeric bind address with reverse DNS. This
+        # local-only server needs no hostname and must not wait for DNS startup.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--demo', action='store_true')
     parser.add_argument('--port', type=int, default=8765)
     args=parser.parse_args()
     controller=Controller(args.demo)
-    server=ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
+    server=LocalHTTPServer(('127.0.0.1', args.port), Handler)
     server.controller=controller; server.host_header=f'127.0.0.1:{server.server_port}'
     print(f"Open http://{server.host_header}/#{controller.token}", flush=True)
     print('DEMO — no hardware access' if args.demo else 'UGS mapping — opening the page does not move the CNC', flush=True)

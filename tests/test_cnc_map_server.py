@@ -17,6 +17,13 @@ def unused_port():
 
 
 class ServerManagerTests(unittest.TestCase):
+    def test_web_startup_does_not_depend_on_reverse_dns(self):
+        from cnc_map_web import LocalHTTPServer, Handler
+        with patch('socket.getfqdn', side_effect=AssertionError('Reverse DNS is unnecessary')):
+            with LocalHTTPServer(('127.0.0.1', 0), Handler) as http:
+                self.assertEqual(http.server_name, '127.0.0.1')
+                self.assertGreater(http.server_port, 0)
+
     def test_identity_excludes_other_processes_and_workspaces(self):
         info={'uid':os.getuid(),'pid':123,'started':'today','command':f'/usr/bin/python3 {server.SERVER} --port 8765'}
         self.assertTrue(server.is_our_server(info,str(server.ROOT)))
