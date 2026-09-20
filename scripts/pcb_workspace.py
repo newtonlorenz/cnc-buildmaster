@@ -9,7 +9,8 @@ import re
 import uuid
 import zipfile
 
-from pcb_gcode import parse_gcode, transform, bounds, finite, require, aligned_gcode
+from job_workflow import defaults, restore_workflow, refresh_tool_checks
+from pcb_gcode import parse_gcode, transform, finite, require, aligned_gcode, sweep
 
 ROLES = ('isolation', 'drilling', 'outline', 'clearing', 'other')
 LABELS = ('A', 'B', 'C')
@@ -27,9 +28,107 @@ def xy(value):
     return [finite(v, 'XY coordinate') for v in value]
 
 
+def export_limits(profile, demo):
+    """Real limits never default; the explicit demo spindle model defaults to 1000."""
+    if profile is None:
+        require(demo, 'Real draft export requires the configured machine profile')
+        return None
+    require(isinstance(profile, dict) and (demo or profile.get('configured') is True),
+            'Real draft export requires the configured machine profile')
+    baseline = profile.get('baseline')
+    require(isinstance(baseline, dict), 'Missing machine baseline for export')
+    result = {}
+    for label, key in [('x', '110'), ('y', '111'), ('z', '112'), ('spindle', '30')]:
+        # The bundled demo has axis rates but no GRBL spindle baseline. Match
+        # its existing simulated spindle model, without filling real omissions
+        # or hiding explicitly supplied invalid values.
+        value = baseline.get(key, 1000 if demo is True and key == '30' else None)
+        require(type(value) in (int, float, str), 'Missing or invalid export limit: ' + label)
+        try:
+            value = float(value)
+        except (ValueError, OverflowError) as error:
+            raise ValueError('Invalid export limit: ' + label) from error
+        ceiling = 1e9 if label == 'spindle' else 100000
+        require(math.isfinite(value) and 0 < value <= ceiling, 'Invalid export limit: ' + label)
+        result[label] = value
+    return result
+
+
+def check_export_rates(parsed, limits, name):
+    """Check emitted G94 feeds per axis, including analytic arc/helix peaks.
+
+    Rapids use controller-managed axis maxima, not modal F. Initial approach,
+    acceleration and physical cutting suitability are not qualified here.
+    """
+    require(parsed['maxSpindle'] <= limits['spindle'], name + ': spindle command exceeds configured maximum')
+    feed = None
+    for block in parsed['blocks']:
+        feed = block.get('feed', feed)
+        move = block.get('move')
+        if not move or move['g'] == 0: continue
+        start, end = move['from'], move['to']
+        delta = [end[i] - start[i] for i in range(3)]
+        if move['g'] == 1:
+            distance = math.hypot(*delta)
+            rates = [feed * abs(d) / distance for d in delta] if distance else [0, 0, 0]
+        else:
+            angle, turn = sweep(start, end, move['centre'], move['g'] == 2)
+            radius = math.dist(start[:2], move['centre'])
+            length_xy = radius * abs(turn)
+            distance = math.hypot(length_xy, delta[2])
+            candidates = [angle, angle + turn]
+            for theta in (0, math.pi/2, math.pi, 3*math.pi/2):
+                travel = ((theta-angle) if turn > 0 else (angle-theta)) % math.tau
+                if travel <= abs(turn) + 1e-12: candidates.append(theta)
+            xy_feed = feed * length_xy / distance
+            rates = [xy_feed * max(abs(math.sin(a)) for a in candidates),
+                     xy_feed * max(abs(math.cos(a)) for a in candidates),
+                     feed * abs(delta[2]) / distance]
+        for axis, rate in zip('xyz', rates):
+            require(rate <= limits[axis] or math.isclose(rate, limits[axis], rel_tol=1e-12),
+                    f'{name}: line {block["line"]} {axis.upper()} feed exceeds configured maximum')
+
+
+def _merge_bounds(total, current):
+    if current is None: return total
+    if total is None: return {a: limits.copy() for a, limits in current.items()}
+    for a in 'xyz':
+        total[a][0] = min(total[a][0], current[a][0])
+        total[a][1] = max(total[a][1], current[a][1])
+    return total
+
+
+def _path_geometry(parsed, placement, include_paths):
+    """Transform every sampled vertex once, retaining paths only when requested.
+
+    Bounds use the actual transformed vertices (including arc extrema), never
+    rotated source bounding boxes. No geometry or reference cache is retained.
+    """
+    paths = [] if include_paths else None
+    travel_low = [math.inf] * 3; travel_high = [-math.inf] * 3
+    cut_low = [math.inf] * 3; cut_high = [-math.inf] * 3
+    for path in parsed['paths']:
+        points = [] if include_paths else None
+        cutting = not path['rapid']
+        for source in path['points']:
+            point = transform(source, placement)
+            for i, value in enumerate(point):
+                if value < travel_low[i]: travel_low[i] = value
+                if value > travel_high[i]: travel_high[i] = value
+                if cutting:
+                    if value < cut_low[i]: cut_low[i] = value
+                    if value > cut_high[i]: cut_high[i] = value
+            if include_paths: points.append(point)
+        if include_paths: paths.append({**path, 'points': points})
+    def result(low, high):
+        return {a: [low[i], high[i]] for i, a in enumerate('xyz')} if low[0] != math.inf else None
+    return paths, result(cut_low, cut_high), result(travel_low, travel_high)
+
+
 class Workspace:
     def __init__(self):
         self.revision = 0
+        self.workflow = defaults()
         self.name = 'Untitled PCB'; self.board_revision = ''; self.face = 'bottom'
         self.stock = {'x': 0., 'y': 0., 'width': 100., 'height': 70., 'thickness': 1., 'margin': 1., 'spoilAllowance': .5}
         self.placement = {'x': 0., 'y': 0., 'angle': 0., 'mirror': False}
@@ -43,10 +142,19 @@ class Workspace:
     def changed(self):
         self.revision += 1
 
+    def has_content(self):
+        """Meaningful preparation worth preserving; not a dirty/live-authority flag."""
+        empty = Workspace()
+        fields = ('name', 'board_revision', 'face', 'stock', 'placement', 'tolerance', 'workflow')
+        return bool(self.operations or any(getattr(self, k) != getattr(empty, k) for k in fields)
+                    or any(p['design'] is not None or p['machine'] is not None for p in self.references.values()))
+
     def invalidate(self, reason, keep_design=True):
         for point in self.references.values():
             point.update(machine=None, session=None)
             if not keep_design: point['design'] = None
+        refresh_tool_checks(self)
+        self.workflow['camera'] = None
         self.alignment = None; self.note = reason; self.changed()
 
     def import_files(self, files):
@@ -155,16 +263,14 @@ class Workspace:
         return bool(self.alignment and self.alignment['status'] == 'captured' and self.alignment['session'] == session)
 
     def public(self, session=None, include_paths=True):
-        operations = []; issues = []; all_cut = []; all_travel = []
+        operations = []; issues = []; all_cut = None; all_travel = None
         s = self.stock; inset = s['margin']
         usable = {'x': [s['x']+inset, s['x']+s['width']-inset], 'y': [s['y']+inset, s['y']+s['height']-inset]}
         for op in self.operations:
             parsed = op['parsed']
-            paths = [{**p, 'points': [transform(v, self.placement) for v in p['points']]} for p in parsed['paths']]
-            cut = [v for p in paths if not p['rapid'] for v in p['points']]
-            travel = [v for p in paths for v in p['points']]
+            paths, cb, travel = _path_geometry(parsed, self.placement, include_paths)
             # Cover 0.01 mm arc tessellation plus accepted endpoint rounding.
-            cb = bounds(cut); radius = (op['diameter'] or 0)/2+.02
+            radius = (op['diameter'] or 0)/2+.02
             footprint = {a: [cb[a][0]-radius, cb[a][1]+radius] for a in 'xy'}
             fits = all(footprint[a][0] >= usable[a][0] and footprint[a][1] <= usable[a][1] for a in 'xy')
             depth_ok = -cb['z'][0] <= s['thickness']+s['spoilAllowance']
@@ -173,19 +279,20 @@ class Workspace:
             if not op['tool'] or op['diameter'] is None: issues.append(op['name']+': specify the cutter and its effective diameter.')
             dangerous = [w for w in parsed['warnings'] if not w.startswith('The initial approach')]
             issues.extend(op['name']+': '+w for w in dangerous)
-            all_cut.extend(cut); all_travel.extend(travel)
+            all_cut = _merge_bounds(all_cut, cb); all_travel = _merge_bounds(all_travel, travel)
             result = {k: op[k] for k in ('id', 'name', 'role', 'tool', 'diameter')}
             result.update({k: parsed[k] for k in ('sha256','warnings','feedMinutes','maxFeed','maxSpindle','lineCount')})
-            result.update(bounds=bounds(travel), cutBounds=cb, footprint=footprint, fits=fits, depthOk=depth_ok)
+            result['warnings'] = list(parsed['warnings'])
+            result.update(bounds=travel, cutBounds=cb, footprint=footprint, fits=fits, depthOk=depth_ok)
             if include_paths: result['paths'] = paths
             operations.append(result)
         if not operations: issues.append('Load at least one cutting file.')
         if not self.valid_alignment(session): issues.append('Capture and check A, B and C in the current machine session.')
-        return {'revision': self.revision, 'name': self.name, 'boardRevision': self.board_revision, 'face': self.face,
+        return {'revision': self.revision, 'hasContent': self.has_content(), 'name': self.name, 'boardRevision': self.board_revision, 'face': self.face,
                 'stock': self.stock.copy(), 'placement': self.placement.copy(), 'operations': operations,
                 'references': copy.deepcopy(self.references), 'alignment': copy.deepcopy(self.alignment), 'note': self.note,
-                'tolerance': self.tolerance, 'cutBounds': bounds(all_cut), 'bounds': bounds(all_travel),
-                'issues': issues, 'canExport': not issues, 'lastSaved': self.last_saved}
+                'tolerance': self.tolerance, 'cutBounds': all_cut, 'bounds': all_travel,
+                'issues': issues, 'canExport': not issues, 'lastSaved': self.last_saved, 'workflow': copy.deepcopy(self.workflow)}
 
     def package(self, session=None):
         data = self.public(session, include_paths=False)
@@ -207,6 +314,8 @@ class Workspace:
         for op, saved in zip(workspace.operations, package['files']):
             require(op['parsed']['sha256'] == saved.get('sha256'), 'Saved file hash does not match its contents')
             workspace.operation({'id': op['id'], **{k: saved.get(k) for k in ('role','tool','diameter')}})
+        workspace.workflow = restore_workflow(job.get('workflow'), workspace.operations, job.get('operations', []))
+        refresh_tool_checks(workspace)
         references = job.get('references', {})
         require(isinstance(references, dict), 'Invalid references')
         for label in LABELS:
@@ -216,11 +325,19 @@ class Workspace:
         workspace.note = 'Setup reopened. Previous machine references and surface approval were discarded.'
         return workspace
 
-    def export(self, session, work_offset, demo=False):
+    def export(self, session, work_offset, demo=False, *, profile=None):
+        """Real exports require profile=validated server config, never client input.
+
+        Demo may omit profile; its .nc.txt drafts then have no machine-limit
+        verification. Neither form grants physical reference or cutting authority.
+        """
         public = self.public(session, include_paths=False)
         require(public['canExport'], 'Resolve all preparation checks before exporting an aligned draft')
-        require(all(op['parsed']['maxFeed'] <= 1000 and op['parsed']['maxSpindle'] <= 1000 for op in self.operations),
-                'File feed or spindle command exceeds the recorded controller maximum')
+        limits = export_limits(profile, demo)
+        prepared = [aligned_gcode(op['parsed'], self.placement, work_offset) for op in self.operations]
+        if limits is not None:
+            for op, source in zip(self.operations, prepared):
+                check_export_rates(parse_gcode(source), limits, op['name'])
         output = io.BytesIO()
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
             archive.writestr('job.pcb-job.json', json.dumps(self.package(session), indent=2))
@@ -232,11 +349,12 @@ class Workspace:
                 'Inspect initial approach, all paths, workholding, tabs and clearance in UGS. Remove probe clip before spindle use.\n'
                 'Re-fixturing, a board flip, reference loss or a new connection invalidates this placement.\n'
                 'Split files remain separate tool operations; each prepared file begins spindle off and paused.\n')
-            for index, op in enumerate(self.operations, 1):
+            for index, (op, source) in enumerate(zip(self.operations, prepared), 1):
                 archive.writestr('originals/'+op['name'], op['source'])
                 filename = f'{index:02d}-'+Path(op['name']).stem+'-ALIGNED-DRAFT.nc'+('.txt' if demo else '')
-                archive.writestr('prepared/'+filename, aligned_gcode(op['parsed'], self.placement, work_offset))
+                archive.writestr('prepared/'+filename, source)
             archive.writestr('reference.json', json.dumps({'g54XY': {a: work_offset[a] for a in 'xy'},
                              'placementInMachineCoordinates': self.placement, 'simulation': demo,
+                             'configuredLimits': limits, 'machineLimitsChecked': limits is not None,
                              'referenceValidAfterReconnect': False, 'cuttingReleased': False}, indent=2))
         return output.getvalue()

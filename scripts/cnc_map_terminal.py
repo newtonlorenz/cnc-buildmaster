@@ -91,8 +91,9 @@ def grid_axis(lo, hi, spacing):
     return values
 
 
-def make_config(snapshots, spacing, current=None, profile=None):
+def make_config(snapshots, spacing, current=None, profile=None, probe_mode="puck"):
     profile = profile or load_config(demo=True)
+    if probe_mode not in ('puck', 'copper'): raise ValueError('Choose puck or copper probing')
     bounds = taught_rectangle(snapshots)
     ordered = list(snapshots.values()) if isinstance(snapshots, dict) else snapshots
     current = current or ordered[-1]
@@ -108,11 +109,11 @@ def make_config(snapshots, spacing, current=None, profile=None):
     return {'version': 1, 'grid': {'x': x, 'y': y, 'spacing': finite(spacing)},
             'start': m, 'travelZ': m['z'], 'expectedG54': offset,
             'envelope': {**bounds, 'z': [round(m['z']-5.2, 3), round(m['z']+1, 3)]},
-            'puckHeight': profile['puckHeight'], 'feeds': profile['feeds'], 'outputDir': profile['dataDir']}
+            'probeMode': probe_mode, 'puckHeight': 0 if probe_mode == 'copper' else profile['puckHeight'], 'feeds': profile['feeds'], 'outputDir': profile['dataDir']}
 
 
-def save_plan(snapshots, spacing, current=None, profile=None):
-    config = make_config(snapshots, spacing, current, profile)
+def save_plan(snapshots, spacing, current=None, profile=None, probe_mode="puck"):
+    config = make_config(snapshots, spacing, current, profile, probe_mode)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     directory = Path(config['outputDir'])/('puck-map-plan-'+stamp)
     directory.mkdir(parents=True, exist_ok=False)

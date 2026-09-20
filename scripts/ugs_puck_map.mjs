@@ -33,7 +33,7 @@ function freeze(o) { if (o && typeof o === 'object') { Object.values(o).forEach(
 
 export function validateConfig(input) {
   const c = structuredClone(input);
-  keys(c, ['version', 'grid', 'start', 'travelZ', 'envelope', 'expectedG54', 'feeds', 'probe', 'puckHeight', 'outputDir'], 'config');
+  keys(c, ['version', 'grid', 'start', 'travelZ', 'envelope', 'expectedG54', 'feeds', 'probe', 'puckHeight', 'outputDir', 'probeMode'], 'config');
   ensure(c.version === 1, 'Expected config version 1');
   xyz(c.start, 'start'); xyz(c.expectedG54, 'expectedG54');
   precision(c.travelZ, 'travelZ'); ensure(c.start.z === c.travelZ, 'start.z must equal travelZ; no startup positioning');
@@ -76,7 +76,10 @@ export function validateConfig(input) {
   ensure(c.probe.firstSearch > 0 && c.probe.firstSearch <= (c.probe.allowExtendedSearch ? 10 : 5), 'First search exceeds explicit limit');
   ensure(c.probe.retract === 1 && c.probe.secondSearch === 1.2, 'Reviewed retract/search are fixed at 1 / 1.2 mm');
   for (const k of ['repeatTolerance', 'driftTolerance']) ensure(c.probe[k] > 0 && c.probe[k] <= 0.02, `${k}: >0 and <=0.02 mm required`);
-  precision(c.puckHeight, 'puckHeight'); ensure(c.puckHeight > 0 && c.puckHeight <= 100, 'Puck height must be greater than 0 and at most 100 mm');
+  c.probeMode ??= 'puck';
+  ensure(['puck', 'copper'].includes(c.probeMode), 'Choose puck or copper probing');
+  precision(c.puckHeight, 'puckHeight');
+  ensure(c.probeMode === 'copper' ? c.puckHeight === 0 : c.puckHeight > 0 && c.puckHeight <= 100, 'Copper requires zero puck height; puck mode requires its measured height');
   ensure(typeof c.outputDir === 'string' && c.outputDir.trim(), 'outputDir required');
   // The second touch may extend 0.2 mm below its first stopped point.
   const zMin = c.travelZ - c.probe.firstSearch - 0.2;
@@ -271,12 +274,12 @@ export function exportMap(c, records) {
   ensure(Math.abs(drift) <= c.probe.driftTolerance + 1e-9, 'Return reference drift exceeds tolerance; map rejected');
   const grid = records.slice(0, -1).sort((a, b) => a.x - b.x || a.y - b.y);
   ensure(new Set(grid.map(p => `${p.x},${p.y}`)).size === c.grid.x.length * c.grid.y.length, 'Missing/duplicate grid points');
-  // Six decimals preserve measured differences. Exact flat maps trigger native bounds edge case.
+  // Six decimals preserve measured differences. Flat maps require the verified native bridge.
   const heights = grid.map(p => Number((p.contactZ - reference).toFixed(6)));
-  ensure(Math.max(...heights) !== Math.min(...heights), 'Flat map: native UGS import edge case; raw evidence only, no fabricated slope');
+
   return {
     xyz: grid.map((p, i) => `${(p.x - c.expectedG54.x).toFixed(6)} ${(p.y - c.expectedG54.y).toFixed(6)} ${heights[i].toFixed(6)}`).join('\n') + '\n',
-    drift, referenceContactZ: reference, requiredG54Z: reference - c.puckHeight,
+    flat: Math.max(...heights) === Math.min(...heights), drift, referenceContactZ: reference, requiredG54Z: reference - c.puckHeight,
     datumMatches: near(c.expectedG54.z, reference - c.puckHeight),
     status: 'Measured map accepted numerically; physical observation, work Z datum and UGS import/application require separate verification'
   };
@@ -286,11 +289,11 @@ export function saveMapHandoff(c, result, write) {
   write('surface.xyz', result.xyz);
   write('ugs-handoff.json', JSON.stringify({version:1,mapFile:'surface.xyz',
     sha256:createHash('sha256').update(result.xyz).digest('hex'),units:'MM',
-    coordinates:'G54 work XY, Z relative to reference surface',puckHeight:c.puckHeight,
+    coordinates:'G54 work XY, Z relative to reference surface',puckHeight:c.puckHeight,probeMode:c.probeMode||'puck',
     capturedG54:c.expectedG54,requiredG54Z:result.requiredG54Z,
     importedInUgs:false,appliedInUgs:false,
     instructions:['Finish custom probing before opening AutoLeveler.',
-      'Import surface.xyz; do not use Scan surface with the puck.',
+      'Prefer verified native map import; flat maps require the native bridge. Never Scan surface with a movable puck.',
       'Use zero probe offsets and zero Z surface for this already normalised map.',
       'Verify the material-top cutting datum and full toolpath coverage in UGS.',
       'Apply height compensation exactly once. Keep connection, tool and workholding unchanged.']},null,2));
@@ -547,6 +550,16 @@ export class Session {
   }
 }
 
+const COPPER_STARTUP = `Copper scan setup — no movement yet:
+- Spindle off, operator at physical stop; no other sender controls in use.
+- Blank continuous copper secured; leads connect the cutter and this SAME copper face.
+- The puck is removed. Copper contact uses zero puck offset.
+- Review the complete grid and fixed travel Z, clip/clamp clearance and cable slack.
+- Every first search is bounded; the entire surface must lie within that search envelope.
+- AutoLeveler is CLOSED and no cutting file is selected in UGS.
+- Continuity and one explicit start confirmation precede automatic two-touch scanning.
+Type "confirm startup" to attest all items, or quit.`;
+
 const STARTUP = `Physical startup confirmation (no movement yet):
 - Main power on; spindle stationary; operator at physical stop; offline keypad disconnected.
 - Same conductive tool and configured puck, no damage or unresolved motion hold; stock secured.
@@ -560,6 +573,28 @@ const STARTUP = `Physical startup confirmation (no movement yet):
 - Failure may request one reviewed softReset if motion is outstanding: reference then invalid.
 Type "confirm startup" to attest ALL items, or quit.`;
 
+export async function measureRoute(session, c, route, gate, {log=()=>{}, say=()=>{}, emit=()=>{}}={}) {
+  const records=[];
+  if (c.probeMode === 'copper') {
+    await gate.ask(`Start the complete copper scan: ${route.points.length} measurements including the return check. The entire grid is continuous conductive copper connected to the probe circuit. Every point has a gap below ${c.probe.firstSearch} mm and the reviewed travel Z clears stock, clips and clamps. Hands clear; remain at Stop. Type "start copper scan".`, 'start copper scan');
+    session.alive(); log('operator', {action:'start copper scan', points:route.points.length});
+  }
+  for (let i = 0; i < route.points.length; i++) {
+      const point = route.points[i]; const waitStart = Date.now();
+      emit({kind:'point',index:i+1,total:route.points.length,point});
+      if (c.probeMode !== 'copper') await gate.ask(`Point ${i + 1}/${route.points.length} (${point.x}, ${point.y})${i === route.points.length - 1 ? ' RETURN REFERENCE' : ''}: puck flat, tip centred, gap <${c.probe.firstSearch} mm. Hands clear until next stop. ENTER: first ≤${c.probe.firstSearch} mm/F${c.feeds.first}, retract 1/F${c.feeds.z}, second ≤1.2/F${c.feeds.second}, lift to MZ ${c.travelZ}, automatic XY/F${c.feeds.xy}.`, '');
+      log('operator', {action: c.probeMode === 'copper' ? 'approved copper route' : 'ENTER', point, waitMs: Date.now() - waitStart});
+      const began = Date.now(); records.push(await session.measure(point)); log('probeDurationMs', Date.now() - began);
+      emit({kind:'measurement',record:records.at(-1)});
+      say(`Recorded ${records.at(-1).contactZ.toFixed(3)} mm; repeat spread ${records.at(-1).spread.toFixed(3)} mm.`);
+      if (i + 1 < route.points.length) {
+        const next = route.points[i + 1]; say(`Automatically moving to (${next.x}, ${next.y}); keep hands/puck stationary.`);
+        const travelStart = Date.now(); await session.move({...next, z: c.travelZ}, c.feeds.xy); log('travelDurationMs', Date.now() - travelStart);
+      }
+    }
+  return records;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const web = argv.includes('--web-stdio');
   const say = text => console.log(web ? JSON.stringify({kind: 'message', text}) : text);
@@ -569,7 +604,7 @@ export async function main(argv = process.argv.slice(2)) {
   ensure(argv.length === (web ? 4 : argv.includes('--execute') ? 3 : 2) && argv[0] === '--config' && (!argv.includes('--execute') || argv[2] === '--execute') && (!web || argv[3] === '--web-stdio'), 'Use --config FILE [--execute [--web-stdio]]');
   const c = validateConfig(JSON.parse(fs.readFileSync(configPath, 'utf8'))), route = planRoute(c);
   console.log(JSON.stringify({kind: 'plan', mode: argv.includes('--execute') ? 'EXECUTE requested, not yet armed' : 'OFFLINE PLAN', config: c, route,
-    note: 'No initial positioning. Each ENTER: two touches, lift to travelZ, record, automatically move to next point. Final point repeats reference. Offsets preserved; map import/datum separate.'}, null, web ? undefined : 2));
+    note: (c.probeMode === 'copper' ? 'No initial positioning. One full-route approval; automatic two-touch contacts, lift and traverse. ' : 'No initial positioning. Each ENTER: two touches, lift to travelZ, record, automatically move to next point. Final point repeats reference. Offsets preserved; map import/datum separate.')}, null, web ? undefined : 2));
   if (!argv.includes('--execute')) return;
   ensure(web || (process.stdin.isTTY && process.stdout.isTTY), 'Execution requires a local interactive terminal');
   const outputRoot = path.resolve(ROOT, c.outputDir); fs.mkdirSync(outputRoot, {recursive: true});
@@ -593,13 +628,13 @@ export async function main(argv = process.argv.slice(2)) {
   const failureWatch = setInterval(() => { if (session.failure && !gate.closed) gate.end(session.failure.message); }, 100);
   const records = []; let complete = false;
   try {
-    await gate.ask(STARTUP, 'confirm startup'); log('operator', 'All startup confirmations attested');
+    await gate.ask(c.probeMode === 'copper' ? COPPER_STARTUP : STARTUP, 'confirm startup'); log('operator', 'All startup confirmations attested');
     if (c.probe.firstSearch > 5) {
       await gate.ask(`Extended ${c.probe.firstSearch} mm descent explicitly configured. Confirm actual gap, search envelope and no intervening obstacle: type "confirm extended search".`, 'confirm extended search');
       log('operator', 'Extended search explicitly confirmed');
     }
   execFileSync(process.env.PYTHON || 'python3', ['scripts/surface_config.py'], {cwd: ROOT});
-  ensure(c.puckHeight === getConfig().puckHeight, 'Plan puck height differs from machine configuration');
+  ensure(c.probeMode === 'copper' ? c.puckHeight === 0 : c.puckHeight === getConfig().puckHeight, 'Plan puck height differs from machine configuration');
     const doctor = JSON.parse(execFileSync('python3', ['scripts/ugs_api.py', 'doctor'], {cwd: ROOT, encoding: 'utf8', timeout: 15000}));
     log('doctor', doctor);
     ensure(!doctor.file.fileName && !doctor.file.remainingRowCount, 'Doctor: file loaded');
@@ -611,21 +646,9 @@ export async function main(argv = process.argv.slice(2)) {
     await session.connect(WebSocketClass);
     const baseline = getConfig().baseline;
     await session.preflight(baseline);
-    await gate.ask('Monitor active. Gently touch puck metal to stationary TOOL TIP and release TWICE, then replace flat: monitor must observe OPEN → CONTACT → OPEN (initial state may be unknown). Confirm undamaged tool/puck and actual contact by typing "contact ready".', 'contact ready');
+    await gate.ask(c.probeMode === 'copper' ? 'Verify the actual cutter-to-copper circuit without axis movement: touch and release a loose copper test piece connected to the same copper face against the stationary tool tip, then remove it from the route. Confirm open/contact/open, intact continuous copper across the entire grid and both leads secured. Type "contact ready".' : 'Monitor active. Gently touch puck metal to stationary TOOL TIP and release TWICE, then replace flat: monitor must observe OPEN → CONTACT → OPEN (initial state may be unknown). Confirm undamaged tool/puck and actual contact by typing "contact ready".', 'contact ready');
     session.alive(); session.contact.requireCycle(); log('operator', 'Manual tool-tip contact/release confirmed');
-    for (let i = 0; i < route.points.length; i++) {
-      const point = route.points[i]; const waitStart = Date.now();
-      if (web) console.log(JSON.stringify({kind:'point',index:i+1,total:route.points.length,point}));
-      await gate.ask(`Point ${i + 1}/${route.points.length} (${point.x}, ${point.y})${i === route.points.length - 1 ? ' RETURN REFERENCE' : ''}: puck flat, tip centred, gap <${c.probe.firstSearch} mm. Hands clear until next stop. ENTER: first ≤${c.probe.firstSearch} mm/F${c.feeds.first}, retract 1/F${c.feeds.z}, second ≤1.2/F${c.feeds.second}, lift to MZ ${c.travelZ}, automatic XY/F${c.feeds.xy}.`, '');
-      log('operator', {action: 'ENTER', point, waitMs: Date.now() - waitStart});
-      const began = Date.now(); records.push(await session.measure(point)); log('probeDurationMs', Date.now() - began);
-      if (web) console.log(JSON.stringify({kind:'measurement',record:records.at(-1)}));
-      say(`Recorded ${records.at(-1).contactZ.toFixed(3)} mm; repeat spread ${records.at(-1).spread.toFixed(3)} mm.`);
-      if (i + 1 < route.points.length) {
-        const next = route.points[i + 1]; say(`Automatically moving to (${next.x}, ${next.y}); keep hands/puck stationary.`);
-        const travelStart = Date.now(); await session.move({...next, z: c.travelZ}, c.feeds.xy); log('travelDurationMs', Date.now() - travelStart);
-      }
-    }
+    records.push(...await measureRoute(session,c,route,gate,{log,say,emit:event=>{if(web)console.log(JSON.stringify(event));}}));
     await session.verifyReference(); session.alive();
     const result = exportMap(c, records);
     // Numerical acceptance is separate from physical observation and later UGS import.

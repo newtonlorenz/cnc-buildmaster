@@ -55,6 +55,7 @@ public class AppV1Config extends ResourceConfig {
 
         register(PositionMapper.class);
         register(new com.willwinder.universalgcodesender.pendantui.v1.resources.HeldJogResource(backendAPI));
+        register(new com.willwinder.universalgcodesender.pendantui.v1.resources.SurfaceMapResource(backendAPI));
         register(StatusResource.class);
         register(MachineResource.class);
         register(TextResource.class);

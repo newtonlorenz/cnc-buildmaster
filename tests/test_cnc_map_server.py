@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 import cnc_map_server as server
 
@@ -31,6 +31,65 @@ class ServerManagerTests(unittest.TestCase):
             self.assertFalse(server.is_our_server({**info,'command':command},str(server.ROOT)))
         self.assertFalse(server.is_our_server(info,'/tmp'))
         self.assertFalse(server.is_our_server({**info,'uid':os.getuid()+1},str(server.ROOT)))
+
+    def test_identity_recognises_offline_and_rejects_conflicting_modes(self):
+        info = {'uid': os.getuid(), 'pid': 123, 'started': 'today',
+                'command': f'/usr/bin/python3 {server.SERVER} --port=8765 --offline'}
+        self.assertTrue(server.is_our_server(info, str(server.ROOT)))
+        self.assertEqual(server.process_mode(info), {'mode': 'offline', 'offline': True, 'demo': False, 'agentPrepare': False})
+        self.assertFalse(server.is_our_server({**info, 'command': info['command']+' --demo'}, str(server.ROOT)))
+        with tempfile.TemporaryDirectory() as directory:
+            manager = server.Manager(8765, directory)
+            with patch.object(server, 'listener', return_value=info):
+                self.assertEqual(manager.current()['mode'], 'offline')
+                self.assertFalse(manager.current()['managed'])
+                with self.assertRaisesRegex(RuntimeError, 'different mode'):
+                    manager.start(demo=True)
+
+    def test_cli_rejects_offline_and_demo_before_any_start(self):
+        for script, prefix in [('cnc_map_server.py', ['start']), ('cnc_map_web.py', []), ('surface_config.py', [])]:
+            result = subprocess.run([sys.executable, str(server.ROOT/'scripts'/script), *prefix,
+                                     '--offline', '--demo'], capture_output=True, text=True)
+            with self.subTest(script=script):
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('not allowed with argument', result.stderr)
+
+    def test_start_and_restart_cli_propagate_offline_mode(self):
+        for action in ('start', 'restart'):
+            manager = MagicMock()
+            manager.start.return_value = {'running': True, 'mode': 'offline'}
+            with patch.object(server, 'Manager', return_value=manager), \
+                 patch.object(sys, 'argv', ['cnc-map', action, '--offline', '--json']), patch('builtins.print'):
+                server.main()
+            manager.start.assert_called_once_with(demo=False, offline=True, agent_prepare=False)
+            self.assertEqual(manager.stop.call_count, int(action == 'restart'))
+
+    def test_offline_lifecycle_without_configuration_is_honest_and_stops_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {'CNC_BUILDMASTER_CONFIG': str(Path(directory)/'missing.json')}):
+            manager = server.Manager(unused_port(), directory)
+            try:
+                started = manager.start(offline=True)
+                self.assertEqual(started['mode'], 'offline')
+                self.assertTrue(started['offline'])
+                self.assertFalse(started['demo'])
+                self.assertIn('--offline', started['identity']['command'])
+                self.assertIn('unavailable', started['message'])
+                self.assertEqual(manager.current()['mode'], 'offline')
+                self.assertEqual(manager.start(offline=True)['identity'], started['identity'])
+                for modes in ({'demo': True}, {}, {'demo': True, 'offline': True}):
+                    with self.assertRaises((RuntimeError, ValueError)):
+                        manager.start(**modes)
+                self.assertIn('OFFLINE preparation', manager.logs())
+                self.assertNotIn('UGS mapping', manager.logs())
+                self.assertFalse(manager.stop()['running'])
+                restarted = manager.start(offline=True)
+                self.assertNotEqual(restarted['identity']['pid'], started['identity']['pid'])
+                self.assertEqual(restarted['mode'], 'offline')
+                self.assertFalse(manager.stop()['running'])
+                self.assertFalse(manager.current()['running'])
+            finally:
+                manager.stop()
 
     def test_ugs_port_and_unsafe_runtime_refused(self):
         with self.assertRaises(ValueError): server.Manager(8080)

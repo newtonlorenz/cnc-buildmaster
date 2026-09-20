@@ -1,0 +1,22 @@
+{
+  "com-willwinder-ugs-platform-surfacescanner.jar": {
+    "com/willwinder/ugs/platform/surfacescanner/AutoLevelerTopComponent.class": "53f92bb31d6cc15cdd3ac79da5fe04209f5b0362cdb37de6a0186e430dfe8cd8",
+    "com/willwinder/ugs/platform/surfacescanner/SurfaceScanner.class": "e1ac49aa788b45f4665bb61ba8ee26db54bff1883d5eb94a574455e273a52e89",
+    "com/willwinder/ugs/platform/surfacescanner/MeshLevelManager.class": "5a20a3526f2ee78456ef7753e370ac9a0d73eba248c21f50a9407ce54969c4e1",
+    "com/willwinder/ugs/platform/surfacescanner/Utils.class": "dd05ed5784658225809055e97fdff99f4cc97e052d47a5f511af3411fe1d1f33",
+    "META-INF/MANIFEST.MF": "137eac227064ed874d52382c8471bff09125cd65d313ab627d6e42727ad21a4d"
+  },
+  "ext/com.willwinder.ugs-platform-ugslib/com-willwinder-universalgcodesender/ugs-core.jar": {
+    "com/willwinder/universalgcodesender/model/GUIBackend.class": "6d7aeb373391e8adeb933a999f5214853e4c91998598fac36b721f124fc39f1b",
+    "com/willwinder/universalgcodesender/gcode/GcodeParser.class": "b2df8ca5f8730b98a2d23519acd7cb2b3ff97432c924183ef00c18bc04ed59c6",
+    "com/willwinder/universalgcodesender/gcode/processors/CommandProcessorList.class": "6a6c26d50a2e34648aa2f59774a9682c1fd54e404b1240e1842d60139236f993",
+    "com/willwinder/universalgcodesender/gcode/processors/MeshLeveler.class": "54f16e97a576e0398f7ff3a60bf84830cc752898170c0fb63c31890f171e7a7c",
+    "com/willwinder/universalgcodesender/utils/AutoLevelSettings.class": "cec38bf13686471ba6102ff2a555b63e59ea108e71afab901875aca5a618157a",
+    "com/willwinder/universalgcodesender/utils/Settings.class": "f8bcfc963cf9ffae15638a8e5ebbe16c33f4685594d7a05da085d094731889c0",
+    "com/willwinder/universalgcodesender/model/Position.class": "3e141559185469cb3ad129b1ca05048c25157a776b58cbe0a21f887f10209941",
+    "META-INF/MANIFEST.MF": "e1f972283104232939bdb047eed4ccce209a3d7cf564e020a0a45d7f244c8adb"
+  },
+  "com-willwinder-ugs-platform-ugslib.jar": {
+    "META-INF/MANIFEST.MF": "0bce05ec51330edf0b1dc1c802efa75f7692d51f10ce688beee8db8fe21fa1e3"
+  }
+}

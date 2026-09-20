@@ -38,6 +38,8 @@ def check_stock():
                 for name, expected in classes.items():
                     if sha(z.read(name)) != expected:
                         raise ValueError('UGS native jog implementation changed; review/rebuild: '+name)
+    from ugs_surface_bridge import check_surface_stock
+    check_surface_stock(APP)
     return hashes
 
 

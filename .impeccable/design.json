@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-20T07:22:54.121167+00:00",
+  "title": "Design System: CNC Buildmaster",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "field-outline",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "Tailwind shadow-xs used by fields and outline buttons."
+      },
+      {
+        "name": "card",
+        "value": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+        "purpose": "Tailwind shadow-sm on base Card."
+      },
+      {
+        "name": "workbench-panel",
+        "value": "0 1px 2px #00000003",
+        "purpose": "Panel override in styles.css."
+      },
+      {
+        "name": "dialog",
+        "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "purpose": "Tailwind shadow-lg on dialogs and sheets."
+      },
+      {
+        "name": "active-workspace",
+        "value": "inset 2px 0 var(--primary)",
+        "purpose": "Active sidebar row."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-transition",
+        "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Installed Tailwind transition defaults."
+      },
+      {
+        "name": "sidebar-transition",
+        "value": "200ms linear",
+        "purpose": "Sidebar geometry transitions."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "animation: none; transition: none; scroll-behavior: auto",
+        "purpose": "Applied under prefers-reduced-motion: reduce."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "40rem"
+      },
+      {
+        "name": "mobile-max",
+        "value": "767px"
+      },
+      {
+        "name": "md",
+        "value": "48rem"
+      },
+      {
+        "name": "surface-columns",
+        "value": "900px"
+      },
+      {
+        "name": "lg",
+        "value": "64rem"
+      },
+      {
+        "name": "guide-stack-max",
+        "value": "1050px"
+      },
+      {
+        "name": "guide-compact-max",
+        "value": "1200px"
+      },
+      {
+        "name": "xl",
+        "value": "80rem"
+      },
+      {
+        "name": "guide-wide-min",
+        "value": "1500px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-primary\">Review setup</button>",
+      "css": ".ds-button-primary{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);background:var(--primary, #176d67);color:var(--primary-foreground, #ffffff);}.ds-button-primary:hover{background:color-mix(in srgb,var(--primary, #176d67) 90%,transparent);}.ds-button-primary:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-button-primary:disabled{opacity:.5;pointer-events:none;}@media(prefers-reduced-motion:reduce){.ds-button-primary{transition:none;}}",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-destructive\">Stop</button>",
+      "css": ".ds-button-destructive{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);background:var(--destructive, #b52835);color:white;}.ds-button-destructive:hover{background:color-mix(in srgb,var(--destructive, #b52835) 90%,transparent);}.ds-button-destructive:focus-visible{box-shadow:0 0 0 3px color-mix(in srgb,var(--destructive, #b52835) 20%,transparent);}.ds-button-destructive:disabled{opacity:.5;pointer-events:none;}:host-context(.dark) .ds-button-destructive{background:color-mix(in srgb,var(--destructive, #b52835) 60%,transparent);}:host-context(.dark) .ds-button-destructive:focus-visible{box-shadow:0 0 0 3px color-mix(in srgb,var(--destructive, #b52835) 40%,transparent);}@media(prefers-reduced-motion:reduce){.ds-button-destructive{transition:none;}}"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-outline\">Review setup</button>",
+      "css": ".ds-button-outline{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);border-width:1px;border-color:var(--border, #dce2e7);background:var(--background, #f7f8fa);color:var(--foreground, #20252b);box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);}.ds-button-outline:hover{background:var(--accent, #e8f2ef);color:var(--accent-foreground, #165e59);}.ds-button-outline:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-button-outline:disabled{opacity:.5;pointer-events:none;}:host-context(.dark) .ds-button-outline{background:color-mix(in srgb,var(--input, #c5cdd5) 30%,transparent);border-color:var(--input, #c5cdd5);}:host-context(.dark) .ds-button-outline:hover{background:color-mix(in srgb,var(--input, #c5cdd5) 50%,transparent);}@media(prefers-reduced-motion:reduce){.ds-button-outline{transition:none;}}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-secondary\">Review setup</button>",
+      "css": ".ds-button-secondary{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);background:var(--secondary, #eef1f3);color:var(--secondary-foreground, #39414b);}.ds-button-secondary:hover{background:color-mix(in srgb,var(--secondary, #eef1f3) 80%,transparent);}.ds-button-secondary:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-button-secondary:disabled{opacity:.5;pointer-events:none;}@media(prefers-reduced-motion:reduce){.ds-button-secondary{transition:none;}}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-ghost\">Review setup</button>",
+      "css": ".ds-button-ghost{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);background:transparent;color:var(--foreground, #20252b);}.ds-button-ghost:hover{background:var(--accent, #e8f2ef);color:var(--accent-foreground, #165e59);}.ds-button-ghost:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-button-ghost:disabled{opacity:.5;pointer-events:none;}:host-context(.dark) .ds-button-ghost:hover{background:color-mix(in srgb,var(--accent, #e8f2ef) 50%,transparent);}@media(prefers-reduced-motion:reduce){.ds-button-ghost{transition:none;}}"
+    },
+    {
+      "name": "Link Button",
+      "kind": "button",
+      "description": "Source-derived Button appearance preview; no application action is attached.",
+      "html": "<button class=\"ds-button-link\">Review setup</button>",
+      "css": ".ds-button-link{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:.5rem 1rem;border:0 solid transparent;border-radius:calc(var(--radius,.625rem) - 2px);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;outline:none;cursor:pointer;transition:all 150ms cubic-bezier(0.4,0,0.2,1);background:transparent;color:var(--primary, #176d67);text-underline-offset:4px;}.ds-button-link:hover{text-decoration:underline;}.ds-button-link:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-button-link:disabled{opacity:.5;pointer-events:none;}@media(prefers-reduced-motion:reduce){.ds-button-link{transition:none;}}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Labelled field preview; the app supplies its actual label and validation.",
+      "html": "<input class=\"ds-input\" aria-label=\"Job name\" placeholder=\"Job name\" />",
+      "css": ".ds-input{height:2.25rem;width:100%;min-width:0;border:1px solid var(--input, #c5cdd5);border-radius:calc(var(--radius,.625rem) - 2px);background:transparent;padding:.25rem .75rem;color:var(--foreground, #20252b);font:400 1rem/1.5rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;outline:none;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color 150ms,box-shadow 150ms;}.ds-input::placeholder{color:var(--muted-foreground, #606b77);}.ds-input:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}.ds-input:disabled{opacity:.5;pointer-events:none;}.ds-input[aria-invalid=true]{border-color:var(--destructive, #b52835);}:host-context(.dark) .ds-input{background:color-mix(in srgb,var(--input, #c5cdd5) 30%,transparent);}@media(min-width:48rem){.ds-input{font-size:.875rem;line-height:1.25rem;}}@media(prefers-reduced-motion:reduce){.ds-input{transition:none;}}"
+    },
+    {
+      "name": "Active workspace",
+      "kind": "nav",
+      "refersTo": "sidebar-item-active",
+      "description": "Expanded active sidebar row; navigation behaviour belongs to the app.",
+      "html": "<button class=\"ds-nav\" aria-current=\"page\">PCB preparation</button>",
+      "css": ".ds-nav{display:flex;align-items:center;height:40px;gap:10px;padding:.5rem 12px;border:0;border-radius:calc(var(--radius,.625rem) - 2px);background:var(--sidebar-accent, #dfeae7);color:var(--sidebar-accent-foreground, #175f59);box-shadow:inset 2px 0 var(--primary, #176d67);font:500 .875rem/1.25rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;text-align:left;cursor:pointer;}.ds-nav:hover,.ds-nav:active{background:var(--sidebar-accent, #dfeae7);color:var(--sidebar-accent-foreground, #175f59);}.ds-nav:focus-visible{outline:2px solid var(--ring, #298a81);outline-offset:2px;}"
+    },
+    {
+      "name": "Secondary Badge",
+      "kind": "chip",
+      "description": "Base secondary status badge, without the smaller operation-row override.",
+      "html": "<span class=\"ds-badge\">Same cutter</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;gap:.25rem;border:1px solid transparent;border-radius:9999px;padding:.125rem .5rem;background:var(--secondary, #eef1f3);color:var(--secondary-foreground, #39414b);font:500 .75rem/1rem -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;white-space:nowrap;}.ds-badge:focus-visible{border-color:var(--ring, #298a81);box-shadow:0 0 0 3px color-mix(in srgb,var(--ring, #298a81) 50%,transparent);}"
+    },
+    {
+      "name": "Workbench Panel",
+      "kind": "card",
+      "description": "Panel wrapper over Card; keeps the larger Card radius and overrides padding and shadow.",
+      "html": "<section class=\"ds-panel\"><header class=\"ds-panel-header\"><h3 class=\"ds-panel-title\">Working area</h3><p class=\"ds-panel-description\">Inspect the current geometry.</p></header><div class=\"ds-panel-content\">Machine coordinates \u00b7 mm</div></section>",
+      "css": ".ds-panel{border:1px solid var(--border, #dce2e7);border-radius:calc(var(--radius,.625rem) + 4px);background:var(--card, #ffffff);color:var(--foreground, #20252b);box-shadow:0 1px 2px #00000003;font:400 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;}.ds-panel-header{padding:19px 20px;}.ds-panel-title{margin:0;font-size:14px;font-weight:600;line-height:1;}.ds-panel-description{margin:6px 0 0;color:var(--muted-foreground, #606b77);font-size:12px;line-height:1.6;}.ds-panel-content{padding:0 20px 20px;}"
+    }
+  ],
+  "narrative": {
+    "overview": "The confirmed direction is a desktop operator workbench with system appearance,\nlight/dark overrides and a shared shadcn foundation across the UI. Task navigation,\nworking geometry and nearby controls support preparation beside the machine.\nThis records the current implementation; it does not establish a new brand metaphor.\n\nTokens below come from `scripts/cnc-map-ui/src/styles.css` and installed source\ncomponents. React 19 owns one application tree; shadcn/Radix controls and AI Elements\nshare its theme. The frontmatter records the implemented palette and reusable\nprimitives; the prose explains their use.",
+    "keyCharacteristics": [
+      "System fonts and local assets.",
+      "Semantic light/dark colours shared by controls and geometry.",
+      "Persistent Stop and machine status, with task-specific inspectors.",
+      "Progressive disclosure of preparation details and evidence."
+    ],
+    "dos": [
+      "Do use the shared shadcn primitives and workbench wrappers across every workspace.",
+      "Do use both theme values for a semantic colour and recheck Canvas/SVG output after appearance changes.",
+      "Do keep Stop visible in modal utilities and mobile navigation, and retain the surface inspector Stop.",
+      "Do preserve native keyboard interaction and visible focus; movement shortcuts belong only to the enabled surface view.",
+      "Do distinguish typed coordinates, current machine readings, accepted measurements and native UGS import receipts.",
+      "Do validate future layout and theme changes in desktop and narrow viewports, including focus, scrolling, Stop visibility and CSP behaviour."
+    ],
+    "donts": [
+      "Don't restore an armed state or physical reference from a presentation preference.",
+      "Don't use selection, success colour or a completed preparation step as proof of physical qualification.",
+      "Don't add another React root, global controller bridge or isolated theme for the Job guide.",
+      "Don't loosen CSP or add remote font, icon or stylesheet dependencies.",
+      "Don't treat source inspection as a browser check or simulation review as physical qualification."
+    ]
+  }
+}

@@ -120,6 +120,25 @@ class GcodeTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_has_content_preserves_preparation_without_counting_bookkeeping(self):
+        w = Workspace()
+        self.assertFalse(w.has_content())
+        self.assertFalse(w.public()['hasContent'])
+        w.invalidate('New session'); w.last_saved = '/previous/save'
+        self.assertFalse(w.has_content())
+        for field, value in [('name', 'Wood trial'), ('board_revision', 'r2'), ('face', 'top'), ('tolerance', .1)]:
+            w = Workspace(); setattr(w, field, value)
+            self.assertTrue(w.has_content(), field)
+            self.assertTrue(w.public()['hasContent'])
+        for edit in [lambda w: w.stock.update(width=120),
+                     lambda w: w.placement.update(x=1),
+                     lambda w: w.workflow.update(material='wood'),
+                     lambda w: w.workflow.update(fixture={'planning': True}),
+                     lambda w: w.workflow['recipes'].append({'planning': True}),
+                     lambda w: w.reference('A', [1, 2])]:
+            w = Workspace(); edit(w); self.assertTrue(w.has_content())
+        self.assertTrue(workspace().has_content())
+
     def test_rigid_three_point_alignment_and_stale_reference(self):
         w=workspace()
         placement={'x':20,'y':25,'angle':37,'mirror':False}
@@ -189,6 +208,100 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(json.loads(z.read('job.pcb-job.json'))['sourceHeightCompensation'],'unknown')
             self.assertFalse(json.loads(z.read('reference.json'))['cuttingReleased'])
         with self.assertRaises(ValueError):w.export('another-session',{'x':2,'y':3})
+
+
+class ExportLimitsTests(unittest.TestCase):
+    def make_job(self, moves, angle=0, mirror=False):
+        source = ('G21 G90 G17 G94 G54\nG0 X1 Y0 Z5\nM3 S12000\n'
+                  'G1 Z-.1 F20\n' + moves + '\nG0 Z5\nM5\nM2\n')
+        w = Workspace(); w.import_files([{'name': 'cut.nc', 'source': source}])
+        w.operation({'id': w.operations[0]['id'], 'role': 'isolation', 'tool': 'Test', 'diameter': .2})
+        placement = {'x': 30, 'y': 30, 'angle': angle, 'mirror': mirror}
+        w.placement['mirror'] = mirror
+        for label, design in [('A', [0, 0]), ('B', [10, 0]), ('C', [0, 10])]:
+            w.reference(label, design, transform(design, placement), 'session')
+        w.solve('session')
+        return w
+
+    def export(self, w, **caps):
+        baseline = {'110': '100', '111': '100', '112': '20', '30': '12000'}
+        baseline.update(caps)
+        return w.export('session', {'x': 2, 'y': 3}, profile={'configured': True, 'baseline': baseline})
+
+    def test_real_export_requires_explicit_validated_profile_and_demo_is_unverified(self):
+        w = self.make_job('G1 X11 F80')
+        for profile in [None, {}, {'configured': False, 'baseline': {}}, {'configured': True, 'baseline': {}}]:
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                w.export('session', {'x': 0, 'y': 0}, profile=profile)
+        with zipfile.ZipFile(io.BytesIO(w.export('session', {'x': 0, 'y': 0}, True))) as archive:
+            record = json.loads(archive.read('reference.json'))
+            self.assertTrue(record['simulation']); self.assertFalse(record['machineLimitsChecked'])
+            self.assertIsNone(record['configuredLimits'])
+
+    def test_supplied_demo_example_defaults_only_missing_simulated_spindle(self):
+        profile = json.loads((Path(__file__).resolve().parents[1]/'config/example.json').read_text())
+        before = copy.deepcopy(profile)
+        self.assertNotIn('30', profile['baseline'])
+        w = self.make_job('G1 X11 F80')
+        op = w.operations[0]
+        op['source'] = op['source'].replace('S12000', 'S1000').replace('Z-.1 F20', 'Z-.1 F5')
+        op['parsed'] = parse_gcode(op['source'])
+        with zipfile.ZipFile(io.BytesIO(w.export('session', {'x': 0, 'y': 0}, True, profile=profile))) as archive:
+            record = json.loads(archive.read('reference.json'))
+            self.assertTrue(record['simulation']); self.assertFalse(record['cuttingReleased'])
+            self.assertEqual(record['configuredLimits']['spindle'], 1000)
+            self.assertIn('prepared/01-cut-ALIGNED-DRAFT.nc.txt', archive.namelist())
+        self.assertEqual(profile, before)
+        real = {**profile, 'configured': True}
+        with self.assertRaisesRegex(ValueError, 'spindle'):
+            w.export('session', {'x': 0, 'y': 0}, False, profile=real)
+        for value in [None, 0, 'nan', '500']:
+            explicit = copy.deepcopy(profile); explicit['baseline']['30'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'spindle'):
+                w.export('session', {'x': 0, 'y': 0}, True, profile=explicit)
+        op['source'] = op['source'].replace('S1000', 'S1001')
+        op['parsed'] = parse_gcode(op['source'])
+        with self.assertRaisesRegex(ValueError, 'spindle'):
+            w.export('session', {'x': 0, 'y': 0}, True, profile=profile)
+
+    def test_spindle_and_plunge_check_configured_boundary_not_fixed_1000(self):
+        w = self.make_job('G1 X11 F80')
+        with zipfile.ZipFile(io.BytesIO(self.export(w))) as archive:
+            record = json.loads(archive.read('reference.json'))
+            self.assertEqual(record['configuredLimits']['spindle'], 12000)
+            self.assertTrue(record['machineLimitsChecked']); self.assertFalse(record['cuttingReleased'])
+        for caps, message in [({'30': '11999'}, 'spindle'), ({'112': '19.999999'}, 'Z feed'),
+                              ({'110': '79.999999'}, 'X feed')]:
+            with self.subTest(caps=caps), self.assertRaisesRegex(ValueError, message): self.export(w, **caps)
+        self.export(w, **{'110': '80', '112': '20', '30': '12000'})
+
+    def test_axis_components_after_rotation_mirroring_and_modal_feed(self):
+        w = self.make_job('F80\nG1 X11', angle=90, mirror=True)
+        self.export(w, **{'110': '10', '111': '80'})
+        with self.assertRaisesRegex(ValueError, 'Y feed'): self.export(w, **{'111': '79'})
+        diagonal = self.make_job('G1 X11 Y10 F100')
+        self.export(diagonal, **{'110': '71', '111': '71'})
+        with self.assertRaisesRegex(ValueError, 'X feed'): self.export(diagonal, **{'110': '70'})
+
+    def test_arc_peaks_and_helix_z_are_not_endpoint_chords(self):
+        full = self.make_job('G2 I-1 J0 F100')
+        self.export(full)
+        with self.assertRaisesRegex(ValueError, 'X feed'): self.export(full, **{'110': '99'})
+        # This short arc never reaches the peak X tangent; it is valid on a slow X axis.
+        short = self.make_job('G3 X.984808 Y.173648 I-1 J0 F100')
+        self.export(short, **{'110': '18'})
+        with self.assertRaisesRegex(ValueError, 'X feed'): self.export(short, **{'110': '17'})
+        helix = self.make_job('G3 I-1 J0 Z-1.1 F100')
+        # Keep the plunge below the tested helix limit, so this exercises the helix itself.
+        source = helix.operations[0]['source'].replace('Z-.1 F20', 'Z-.1 F1')
+        helix.operations[0]['source'] = source
+        helix.operations[0]['parsed'] = parse_gcode(source)
+        with self.assertRaisesRegex(ValueError, 'Z feed'): self.export(helix, **{'112': '10'})
+
+    def test_invalid_machine_caps_fail_as_validation_errors(self):
+        w = self.make_job('G1 X11 F80')
+        for invalid in [True, None, '', 'nan', float('inf'), 0, -1, 10**400]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError): self.export(w, **{'112': invalid})
 
 
 class ControllerPcbTests(unittest.TestCase):

@@ -54,9 +54,15 @@ def is_our_server(info, cwd):
     if args[1] not in ENTRYPOINTS:
         return False
     tail = args[2:]
+    mode = None
     while tail:
         arg = tail.pop(0)
-        if arg == '--demo':
+        if arg in ('--demo', '--offline'):
+            if mode is not None and mode != arg:
+                return False
+            mode = arg
+            continue
+        if arg == '--agent-prepare':
             continue
         if arg == '--port' and tail and tail[0].isdigit():
             tail.pop(0); continue
@@ -64,6 +70,13 @@ def is_our_server(info, cwd):
             continue
         return False
     return True
+
+
+def process_mode(info):
+    args = shlex.split(info['command'])[2:]
+    offline, demo = '--offline' in args, '--demo' in args
+    return {'mode': 'offline' if offline else 'demo' if demo else 'real',
+            'offline': offline, 'demo': demo, 'agentPrepare': '--agent-prepare' in args}
 
 
 def listener(port):
@@ -131,7 +144,7 @@ class Manager:
         saved = self.state()
         if current:
             same = saved and saved.get('identity') == current
-            return {**(saved if same else {}), 'identity': current, 'running': True, 'managed': bool(same)}
+            return {**(saved if same else {}), **process_mode(current), 'identity': current, 'running': True, 'managed': bool(same)}
         # A retiring process may have closed its listening socket before its worker exits.
         if saved and (process_info(saved['identity']['pid']) == saved['identity'] or any(process_info(w['pid']) == w for w in saved.get('workers', []))):
             return {**saved, 'running': True, 'retiring': True}
@@ -163,28 +176,35 @@ class Manager:
             time.sleep(.1)
         raise RuntimeError('Server or worker did not exit cleanly; replacement refused. No force-kill was sent. Inspect the log; use the physical stop if movement persists.')
 
-    def start(self, demo=False):
+    def start(self, demo=False, offline=False, agent_prepare=False):
+        if demo and offline:
+            raise ValueError('--demo and --offline are mutually exclusive')
+        if agent_prepare and not offline:
+            raise ValueError('--agent-prepare requires --offline')
+        mode = 'offline' if offline else 'demo' if demo else 'real'
         current = self.current()
         if current['running']:
             if current.get('retiring'):
                 raise RuntimeError('The previous server is still shutting down; no second server started')
-            if current.get('managed') and current.get('demo') != demo:
-                raise RuntimeError('Server is running in a different mode; use restart with the intended --demo option')
+            if current.get('mode') != mode or bool(current.get('agentPrepare')) != agent_prepare:
+                raise RuntimeError('Server is running in a different mode; use restart with the requested mode and agent preparation options')
             return {**current, 'message': 'Web server is already running.'}
-        if self.port == load_config(demo=demo)['ugsPort']:
+        profile = load_config(demo=demo, offline=offline)
+        if not offline and self.port == profile['ugsPort']:
             raise ValueError('The web port must differ from the UGS port')
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
         log = self.runtime/f'{self.port}-{stamp}.log'
         fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        command = [sys.executable, str(SERVER), '--port', str(self.port)] + (['--demo'] if demo else [])
+        command = [sys.executable, str(SERVER), '--port', str(self.port)] + (['--offline'] if offline else ['--demo'] if demo else []) + (['--agent-prepare'] if agent_prepare else [])
         with os.fdopen(fd, 'w') as stream:
             child = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
-                                     start_new_session=True, close_fds=True)
+                                     start_new_session=True, close_fds=True,
+                                     env={**os.environ, 'CNC_MAP_RUNTIME_DIR': str(self.runtime)})
         self.spawned.append(child)
         identity = process_info(child.pid)
         if identity is None:
             raise RuntimeError(f'Server exited on startup. Log: {log}')
-        self.save({'identity': identity, 'log': str(log), 'demo': demo})
+        self.save({'identity': identity, 'log': str(log), 'demo': demo, 'offline': offline, 'mode': mode, 'agentPrepare': agent_prepare})
         try:
             deadline = time.monotonic()+10
             while time.monotonic() < deadline:
@@ -195,9 +215,10 @@ class Manager:
                 active = listener(self.port) if match else None
                 if active and active['pid'] == child.pid:
                     identity = active
-                    value = {'identity': identity, 'log': str(log), 'demo': demo, 'url': match[1]}
+                    value = {'identity': identity, 'log': str(log), 'demo': demo, 'offline': offline, 'mode': mode, 'agentPrepare': agent_prepare, 'url': match[1]}
                     self.save(value)
-                    return {**value, 'running': True, 'managed': True, 'message': 'Web server started; controls are not armed.'}
+                    return {**value, 'running': True, 'managed': True,
+                            'message': 'Offline preparation started; machine controls are unavailable.' if offline else 'Web server started; controls are not armed.'}
                 time.sleep(.1)
             raise RuntimeError(f'Server startup timed out. Log: {log}')
         except BaseException:
@@ -222,23 +243,28 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('start','stop','restart','status','logs'))
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--demo', action='store_true', help='Start with no hardware access')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--demo', action='store_true', help='Start with simulated machine data')
+    mode.add_argument('--offline', action='store_true', help='Prepare real files without machine configuration or connection')
+    parser.add_argument('--agent-prepare', action='store_true', help='Enable headless agent preparation; requires --offline')
     parser.add_argument('--lines', type=int, default=40, help='Lines shown by logs')
     parser.add_argument('--json', action='store_true', help='Machine-readable output')
     args = parser.parse_args()
     try:
+        if args.agent_prepare and not args.offline: raise ValueError('--agent-prepare requires --offline')
         if not 1 <= args.lines <= 1000: raise ValueError('--lines must be 1–1000')
         manager = Manager(args.port)
         with manager.locked():
             if args.action == 'logs':
                 print(manager.logs(args.lines)); return
-            if args.action == 'restart': manager.stop(); result = manager.start(args.demo)
+            if args.action == 'restart': manager.stop(); result = manager.start(demo=args.demo, offline=args.offline, agent_prepare=args.agent_prepare)
             elif args.action == 'stop': result = manager.stop()
-            elif args.action == 'start': result = manager.start(args.demo)
+            elif args.action == 'start': result = manager.start(demo=args.demo, offline=args.offline, agent_prepare=args.agent_prepare)
             else: result = manager.current()
         if args.json:
             print(json.dumps(result)); return
         print(result.get('message') or ('Web server is running.' if result['running'] else 'Web server is stopped.'))
+        if result.get('mode'): print('Mode:', result['mode'])
         if result.get('identity'): print('PID:', result['identity']['pid'])
         if result.get('url'): print('Open:', result['url'])
         elif result['running']: print('Use restart to get a fresh browser link and managed log.')

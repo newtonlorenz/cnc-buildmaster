@@ -1,5 +1,16 @@
 # Operation
 
+## Choose the task
+
+Use **Start surface mapping** for a puck scan without cutting files. Use **Add CAM
+files** for a full job. The Job guide shows the next missing preparation check and
+links to its editor. Optional calculations and records live in **Workshop tools**.
+**Workflow help** explains the routes and CNC terms inside the app.
+
+For file preparation without a machine, start with `./cnc-map start --offline`.
+This mode uses a separate planning store and blocks all machine actions. Reopen
+its package in a configured machine workspace before capturing references.
+
 ## Job preparation
 
 1. Add existing CAM files for one machining face.
@@ -9,7 +20,10 @@
 5. Define two design references and a separate third point.
 6. Capture their machine positions in the same uninterrupted session.
 7. Inspect the alignment result and export checks.
-8. Download the aligned draft.
+8. Use the proposed cutting area for a surface measurement if needed.
+9. Download the aligned draft while the checked teaching or completed scan session
+   is still open. Review the setup sheet and native map import.
+10. Select **Finish preparation in UGS** before changing Z or selecting cutting files in UGS.
 
 Manual references produce a draft alignment only. They cannot enable a live aligned export.
 The export retains source Z coordinates and spindle commands. It does not apply height compensation.
@@ -83,3 +97,52 @@ Appearance follows the operating system. Select System, Light or Dark in the tit
 bar. Cmd/Ctrl+K searches navigation actions only. Map zoom and Fit change the view
 without moving the CNC. Connection contains the configured puck height and feeds,
 read-only diagnostics and the session report download.
+
+## Direct copper scans
+
+Choose **Continuous copper** before enabling the setup, or use **Use this scan
+area** from an aligned PCB job. Remove the puck and connect the probe circuit to
+the cutter and the same continuous copper face. The loose contact test piece must
+use that circuit. The app requires observed open/contact/open before approval of
+the automatic route. Every point must lie within the displayed bounded search
+and the full route must clear clamps and leads. Stay at the machine during the
+scan. Stop, lost contact, stale status or reference changes end the sequence.
+
+Copper mode has zero puck height. It still uses two touches at every point and a
+return-reference check. Puck mode retains its individual placement confirmations.
+An exactly flat accepted map retains zero heights; use the native import bridge
+for that map because the legacy XYZ loader has a flat-bounds edge case.
+
+## Native handoff
+
+After an accepted real scan, open an empty AutoLeveler in UGS, disable Apply to
+G-code and clear any selected cutting file. Use **Import accepted map into UGS** in Surface results or the Job guide. The app checks the same UGS process, configuration and current reference,
+then reads back and hashes the actual native grid. Zero native probe offsets and
+zero Z surface are required for these already normalised heights. Existing native
+scan travel limits are preserved. The app does not start a native scan.
+
+The observer remains active through scan completion, draft export and native
+import. Select **Finish preparation in UGS** when these steps are done. This closes
+only the observer; no cut or spindle command is sent. Changing the work reference
+or selecting a cutting file in UGS before that point invalidates the guarded setup. Software observation does not prove
+physical continuity; an import receipt remains evidence of its readback time. Inspect material-top Z and the
+final compensated toolpath in UGS; importing a map does not apply compensation.
+
+## Results, saves and recovery
+
+Surface results show actual numbered contacts, relative height range, repeat
+spread and a separate return check. Select a contact to inspect it. Incomplete
+scans remain labelled incomplete. Download the measurement report for the original
+readings and provenance; this JSON report is not an importable map.
+
+Save a job package to preserve files and preparation records. Historical cutter
+observations survive reopening, but never establish a Z reference. Replacement
+asks before discarding local drafts; the server also keeps a recovery package for
+applied preparation records. Saved packages use atomic UTF-8 writes.
+
+If the original browser tab is closed, open the current launcher address and use
+Connection → **Recover closed tab & clear references**. Recovery requires the old
+tab to have expired and all machine workers to have stopped. It keeps preparation
+records, revokes the old tab and starts with no physical references. It does not
+resume movement or probing. An expired server token instead requires the new
+address printed by `./cnc-map status`.

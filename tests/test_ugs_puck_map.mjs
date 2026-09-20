@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {validateConfig, planRoute, parseEvent, probeContact, commandBounds, checkStatus,
-  commandDeadline, parseOffsets, checkModes, checkBaseline, InputGate, JsonInputGate, ContactMonitor, exportMap, saveMapHandoff, Session} from '../scripts/ugs_puck_map.mjs';
+  commandDeadline, parseOffsets, checkModes, checkBaseline, InputGate, JsonInputGate, ContactMonitor, exportMap, saveMapHandoff, measureRoute, Session} from '../scripts/ugs_puck_map.mjs';
 
 const raw = () => ({version: 1, grid: {x: [0, 50, 100], y: [1, 51, 81], spacing: 50},
   start: {x: 100, y: 1, z: -4.754}, travelZ: -4.754,
@@ -170,12 +170,12 @@ test('export sorted native order, work XY and relative heights; G54 left unresol
   assert.equal(lines.length,9); assert.equal(out.requiredG54Z,-21); assert.equal(out.datumMatches,false);
   assert.ok(Math.abs(out.drift-.005)<1e-9);
 });
-test('no XYZ export for incomplete, wrong membership, excessive spread/drift or flat map', () => {
+test('no XYZ export for incomplete, wrong membership, excessive spread/drift; flat maps retain real zero heights', () => {
   const c=config(), r=measurements(c); assert.throws(()=>exportMap(c,r.slice(0,-1)),/Incomplete/);
   let copy=structuredClone(r); copy[1].x=123; assert.throws(()=>exportMap(c,copy));
   copy=structuredClone(r); copy[2].spread=.021; assert.throws(()=>exportMap(c,copy));
   copy=structuredClone(r); copy.at(-1).contactZ+=.1; assert.throws(()=>exportMap(c,copy),/drift/);
-  copy=structuredClone(r).map(p=>({...p,contactZ:-7})); assert.throws(()=>exportMap(c,copy),/Flat map/);
+  copy=structuredClone(r).map(p=>({...p,contactZ:-7})); const flat=exportMap(c,copy);assert.equal(flat.flat,true);assert.ok(flat.xyz.trim().split('\n').every(line=>Number(line.split(' ')[2])===0));
 });
 
 test('mocked command requires matching SENT/id/COMPLETE and stopped target', async () => {
@@ -455,4 +455,24 @@ test('native held jog refuses movement after release and cancels a bounds failur
  assert.equal((await session.nativeJog(plan,{active:()=>false},id)).moved,0);assert.equal(starts,0);
  await assert.rejects(session.nativeJog(plan,{active:()=>true},id),/bounds/);
  assert.equal(starts,1);assert.equal(cancels,1);
+});
+
+for(const mode of ['puck','copper']) test(`${mode} route retains its distinct operator gate and stops after a failure`,async()=>{
+ const c=validateConfig({...raw(),probeMode:mode,puckHeight:mode==='copper'?0:14}),route=planRoute(c),prompts=[],moves=[];
+ const gate={ask:async(prompt,expected)=>prompts.push(expected)};
+ const session={alive:()=>{},measure:async p=>({...p,contactZ:-7,spread:.001}),move:async p=>moves.push(p)};
+ const records=await measureRoute(session,c,route,gate);
+ assert.equal(records.length,route.points.length);assert.equal(moves.length,route.points.length-1);
+ assert.deepEqual(prompts,mode==='copper'?['start copper scan']:route.points.map(()=>''));
+ moves.length=0;let touches=0;
+ session.measure=async p=>{if(++touches===2)throw Error('Stopped contact');return {...p,contactZ:-7,spread:0}};
+ await assert.rejects(measureRoute(session,c,route,gate),/Stopped contact/);assert.equal(moves.length,1);
+});
+test('copper has zero probe offset and no move before full route approval',async()=>{
+ assert.throws(()=>validateConfig({...raw(),probeMode:'copper'}),/zero/);
+ assert.throws(()=>validateConfig({...raw(),probeMode:'puck',puckHeight:0}));
+ assert.throws(()=>validateConfig({...raw(),probeMode:'made-up'}));
+ const c=validateConfig({...raw(),probeMode:'copper',puckHeight:0});let touched=false;
+ await assert.rejects(measureRoute({measure:async()=>{touched=true}},c,planRoute(c),{ask:async()=>{throw Error('Cancelled')}}),/Cancelled/);
+ assert.equal(touched,false);assert.equal(exportMap(c,measurements(c)).requiredG54Z,-7);
 });

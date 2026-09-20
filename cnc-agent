@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// Keep the launcher usable without changing the package's module type.
+import('./scripts/agent_bridge.mjs').then(({ main }) => main()).catch(() => {
+  process.stderr.write('Could not load the agent bridge. Run npm ci in CNC Buildmaster.\n');
+  process.exitCode = 1;
+});

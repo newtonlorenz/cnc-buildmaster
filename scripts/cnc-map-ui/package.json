@@ -1,1 +1,32 @@
-{"name":"surface-workbench-ui","private":true,"type":"module","scripts":{"build":"esbuild src/workbench.js --bundle --minify --format=iife --target=es2022 --outfile=../cnc-map-web/workbench.js --legal-comments=eof"},"dependencies":{"esbuild":"0.28.2","lit":"3.3.3","lucide":"1.47.0"},"devDependencies":{"linkedom":"0.18.13"}}
+{
+  "name": "surface-workbench-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "^1.1.1",
+    "cn": "^0.3.0",
+    "esbuild": "0.28.2",
+    "get-nonce": "1.0.1",
+    "lucide-react": "1.47.0",
+    "motion": "^13.4.0",
+    "radix-ui": "^1.6.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-resizable-panels": "^4.12.4",
+    "tailwind-merge": "3.7.0",
+    "tailwindcss": "4.3.3"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "linkedom": "0.18.13",
+    "typescript": "7.0.2"
+  }
+}

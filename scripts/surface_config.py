@@ -7,10 +7,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def load_config(demo=False):
+def offline_data_dir():
+    """Use a dedicated planning store, never the machine configuration's dataDir."""
+    directory = ROOT/'data'/'offline-preparation'
+    for path in (directory.parent, directory, directory/'jobs'):
+        if path.is_symlink():
+            raise ValueError('Offline preparation storage must not be a symbolic link: '+str(path))
+    return directory
+
+
+def load_config(demo=False, offline=False):
+    if demo and offline:
+        raise ValueError('--demo and --offline are mutually exclusive')
+    if offline:
+        return {'version': 1, 'name': 'Offline preparation', 'configured': False,
+                'configPath': None, 'dataDir': str(offline_data_dir())}
     filename = os.environ.get('CNC_BUILDMASTER_CONFIG')
     if not demo and not filename:
-        raise ValueError('Set CNC_BUILDMASTER_CONFIG to your machine configuration. Use --demo for simulation.')
+        raise ValueError('Set CNC_BUILDMASTER_CONFIG to your machine configuration. Use --offline for preparation or --demo for simulation.')
     source = Path(filename).expanduser().resolve() if filename else ROOT/'config/example.json'
     c = json.loads(source.read_text())
     if c.get('version') != 1:
@@ -52,9 +66,11 @@ def load_config(demo=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--demo', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--demo', action='store_true')
+    mode.add_argument('--offline', action='store_true')
     args = parser.parse_args()
     try:
-        print(json.dumps(load_config(args.demo)))
+        print(json.dumps(load_config(args.demo, args.offline)))
     except (ValueError, KeyError, OSError, TypeError) as error:
         parser.exit(1, str(error)+'\n')

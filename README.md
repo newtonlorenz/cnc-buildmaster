@@ -1,6 +1,6 @@
 # CNC Buildmaster
 
-**See the cutting paths. Position the cutter. Measure the surface.**
+**Prepare the job. Measure the surface. Continue in UGS.**
 
 [![Offline checks](https://github.com/newtonlorenz/cnc-buildmaster/actions/workflows/test.yml/badge.svg)](https://github.com/newtonlorenz/cnc-buildmaster/actions/workflows/test.yml)
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
@@ -14,9 +14,9 @@ You can explore the demo without a machine.
 
 [Try the demo](#try-it-without-a-machine) · [What it does](#tools-in-the-workbench) · [Machine setup](#use-your-own-machine) · [Report a problem](https://github.com/newtonlorenz/cnc-buildmaster/issues)
 
-![CNC Buildmaster in demo mode, with a desktop workbench, a measurement grid, the planned route and a visible Stop control.](docs/images/surface-measurement.png)
+![CNC Buildmaster task selection: measure a surface or prepare a cutting job.](docs/images/preparation-start.png)
 
-*The real app in demo mode. The grid and coordinates are simulated. No machine was connected for this screenshot.*
+*The real app in demo mode. No machine was connected for this screenshot.*
 
 ## Why use it?
 
@@ -34,11 +34,15 @@ Saved files do not restore a valid physical machine reference.
 
 | Tool | What you can do |
 | --- | --- |
-| **PCB preparation** | Open cutting files, view their paths on the material, assign cutters and align the job with reference points. |
+| **Job guide** | Follow the preparation stages, keep setup evidence and review the UGS handoff. |
+| **Files & alignment** | Open cutting files, view their paths on the material, assign cutters and align the job with reference points. |
 | **Surface mapping** | Define the area, plan the grid and measure the surface. Jog controls and measurement prompts stay in separate steps. |
+| **Workshop tools** | Optional fixture checks, cutter observations, recipes, camera offsets and reviewed wood drafts. |
 | **Camera** | Open a local live view. The camera does not measure position or control movement. |
 | **Connection** | Check UGS and inspect your configured machine, puck height and permitted speeds. |
 | **Session log** | Inspect recent events and saved-file details. |
+
+The interface uses one React application with shadcn/ui components throughout: navigation, forms, controls, inspectors and dialogs. All assets are served locally.
 
 The desktop layout keeps the work area beside the controls. Appearance follows
 your operating system, with Light and Dark overrides. Use **Cmd/Ctrl+K** to find a
@@ -49,7 +53,11 @@ corners. Accept both in one action without travelling to them. Grid presets show
 the exact placement count, including the return check. Wider spacing saves
 placements but can miss surface variation; choose it for the cutting job.
 
-During measurement, you place the puck at each point and tell the app when you are ready.
+![Measured contacts with a separate return check and explicit UGS handoff controls.](docs/images/surface-measurement.png)
+
+*Surface results from a simulated scan. These readings do not describe a real workpiece.*
+
+Choose the contact method for the material. A movable puck waits for your confirmation at every point. Continuous PCB copper uses a checked probe circuit and one explicit approval for the complete automatic route.
 The machine takes two contacts, lifts the cutter and travels to the next point.
 You stay at the machine throughout the process.
 
@@ -64,7 +72,7 @@ You stay at the machine throughout the process.
 
 CNC Buildmaster uses UGS for its machine connection.
 It does not replace your design software or generate cutting paths from a circuit-board design.
-It does not send cutting jobs, scan copper automatically, or apply height correction to exported cutting files.
+It does not send cutting jobs or apply height correction to exported cutting files. Copper scanning requires a checked circuit and explicit approval of the complete route.
 
 An exported cutting file is a **draft for inspection in UGS**, not an approved machining job.
 
@@ -100,7 +108,7 @@ npm ci
 `npm ci` downloads the software dependencies. The second command starts the demo.
 
 8. Copy the local web address from Terminal into your browser.
-9. In **PCB preparation**, select **Load rectangle example**.
+9. Select **Explore a geometry example**, or choose **Start surface mapping**.
 10. Explore the workspaces and utilities in the navigation.
 
 The demo does not send commands to UGS. Its simulated measurements cannot become a machine height map.
@@ -123,6 +131,41 @@ npm ci
 ```
 
 </details>
+
+## Use with Codex or another AI agent
+
+Buildmaster includes a JSON terminal interface and a local MCP server. Agents can
+inspect a job, prepare files and save records. Machine actions appear for your
+review in **Agent access**; puck-placement and contact confirmations stay with you.
+
+```sh
+./cnc-agent tools
+./cnc-agent status
+./cnc-agent job
+```
+
+Start the app first. The bridge reads private local credentials automatically and
+does not take over the browser or keep a machine session alive. See the
+[agent guide](docs/AGENTS.md) for MCP configuration, offline automation and examples.
+
+## Prepare files without a machine
+
+Use offline preparation to inspect real CAM files and save planning records.
+It does not require a machine configuration, UGS or simulated movement.
+
+```sh
+./cnc-map start --offline
+```
+
+Open **Files & alignment** to inspect files and stock. **Workshop tools** keeps
+optional planning records out of the normal preparation flow. Jobs are saved
+separately in `data/offline-preparation/jobs` and can be downloaded as portable
+packages. Reopen a package in a configured machine workspace to capture fresh
+references. Offline mode cannot move, probe, import a map or export a live aligned
+draft. Machine-dependent draft generation is also unavailable.
+
+Use a different `--port` if another Buildmaster service is running. The launcher
+will not silently change the mode of an existing server.
 
 ## Use your own machine
 
@@ -155,7 +198,7 @@ The initial dependency installation needs internet access.
 **Does the camera record or upload video?**
 
 No. The camera image stays in your browser.
-Its crosshair is a visual aid, not a calibrated measurement.
+Its crosshair is a visual aid. Workshop tools can calculate a camera-centre offset from entered fiducial measurements at one Z plane; this is a numerical check, not physical qualification.
 
 **Which files can I open?**
 
@@ -170,7 +213,7 @@ The [configuration guide](docs/CONFIGURATION.md) explains the fields and limits.
 
 **Is it ready for unattended operation?**
 
-No. Surface measurement needs an operator at the machine and manual puck placement.
+No. An operator must remain at the machine. Puck scans require manual placement at each point. Continuous copper can be measured automatically after circuit checks and approval of the complete route.
 This is an early project. Automated tests do not qualify a physical machine or cutting process.
 
 ## Documentation
@@ -178,6 +221,8 @@ This is an early project. Automated tests do not qualify a physical machine or c
 - [Configuration](docs/CONFIGURATION.md) — machine details, speeds and storage.
 - [UGS extension](docs/UGS.md) — connection setup and compatibility checks.
 - [Operation](docs/OPERATION.md) — job preparation, movement and surface measurement.
+- [Product review](docs/PRODUCT_REVIEW.md) — intended journeys, implemented fixes and release gates.
+- [Agent guide](docs/AGENTS.md) — terminal commands, MCP and operator review.
 - [Architecture](docs/ARCHITECTURE.md) — how the software components fit together.
 
 ## Get involved
@@ -220,3 +265,25 @@ CNC Buildmaster uses **GPL-3.0-or-later**. See the [license](LICENSE) for use, m
 The machine integration builds on [Universal Gcode Sender](https://github.com/winder/Universal-G-Code-Sender).
 Modified UGS source retains its original copyright notices.
 See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency information.
+
+### Job guide and preparation tools
+
+The Job guide uses locally bundled [AI Elements](https://elements.ai-sdk.dev/) Plan,
+Task and Queue components with React. Optional forms live in Workshop tools. It follows the Mac appearance setting and
+keeps Stop visible in the shared workbench shell. No AI service or API key is used.
+
+- Derive scan coverage from placed cutting paths, effective tool diameters and a
+  1 mm margin. Fresh alignment and an uncompensated source declaration are required.
+- Inspect a declared tool/holder envelope against modelled clamps and travel bounds.
+- Record tool-change observations, dated material recipes and measured outcomes.
+- Calculate nominal V-bit width, prepare a dimensional coupon or a wood surfacing
+  draft with explicit tool, material, workholding and machine reviews.
+- Fit a camera-centre XY offset using two fiducials and an independent third check
+  at the same Z. Board-flip assistance remains planning geometry.
+- Import an accepted map into the open native UGS AutoLeveler and verify its actual
+  grid by readback. This needs the rebuilt extension; see
+  [native handoff](extensions/ugs/SURFACE_HANDOFF.md).
+
+Recipe records and geometric checks do not qualify a cutting process. Draft
+G-code is never sent by this app. Native import does not apply compensation or
+verify material Z, physical reference continuity or a selected cutting file.

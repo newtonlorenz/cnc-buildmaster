@@ -342,6 +342,7 @@ class WebTests(unittest.TestCase):
             root=Path(directory)
             folder=root/'evidence/test-scan'
             folder.mkdir(parents=True)
+            (folder/'config.json').write_text('{}')
             xyz=folder/'surface.xyz';xyz.write_text('0 0 0\n0 1 0.1\n')
             summary={'drift':0.001,'requiredG54Z':-14.0}
             (folder/'result.json').write_text(json.dumps({**summary,'physicalObservationConfirmed':True,'offsetsPreserved':True,'appliedInUgs':False}))
@@ -353,7 +354,8 @@ class WebTests(unittest.TestCase):
                 with patch.dict(self.c.profile,{'dataDir':str(folder.parent)}),patch.object(web.subprocess,'Popen',return_value=worker):
                     self.c.launch(['fake-worker'],scan=True)
             run()
-            self.assertEqual(self.c.data['result'],event)
+            self.assertEqual(set(self.c.data['result']['acceptedHashes']), {'surface.xyz','config.json','result.json','ugs-handoff.json'})
+            self.assertEqual({k:v for k,v in self.c.data['result'].items() if k!='acceptedHashes'},event)
             self.c.data['result']=None
             xyz.write_text('altered')
             with self.assertRaisesRegex(ValueError,'checksum'):run()
@@ -386,7 +388,7 @@ class WebTests(unittest.TestCase):
             code,data=request('GET','/api/report')
             self.assertEqual(code,200)
             self.assertNotIn(self.c.token,json.dumps(data))
-            self.assertEqual(data['apiVersion'],6)
+            self.assertEqual(data['apiVersion'],7)
             self.assertIn('pcb',data)
             self.assertEqual(request('GET','/api/pcb',auth=False)[0],403)
             code,pcb=request('GET','/api/pcb')
@@ -397,6 +399,42 @@ class WebTests(unittest.TestCase):
             self.assertEqual(request('POST','/api/stop',{})[0],200)
             self.assertTrue(self.c.stopped)
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_html_has_fresh_scoped_style_nonce_and_only_current_assets(self):
+        server = web.LocalHTTPServer(('127.0.0.1', 0), web.Handler)
+        server.controller = self.c
+        server.host_header = f'127.0.0.1:{server.server_port}'
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        def get(path):
+            conn = http.client.HTTPConnection('127.0.0.1', server.server_port)
+            conn.request('GET', path)
+            response = conn.getresponse()
+            result = (response.status, response.getheader('Content-Security-Policy'), response.read())
+            conn.close()
+            return result
+        try:
+            nonces = []
+            for _ in range(2):
+                code, policy, body = get('/')
+                self.assertEqual(code, 200)
+                html = body.decode()
+                nonce = web.re.search(r'name="csp-nonce" content="([A-Za-z0-9_-]+)"', html).group(1)
+                nonces.append(nonce)
+                self.assertIn(f"style-src 'self' 'nonce-{nonce}'", policy)
+                self.assertIn("script-src 'self';", policy)
+                self.assertNotIn('unsafe-inline', policy)
+                self.assertNotIn(self.c.token, html)
+                self.assertIn('/app.bundle.js', html)
+                self.assertNotIn('/workbench.js', html)
+            self.assertNotEqual(*nonces)
+            self.assertEqual(get('/app.js')[0], 404)
+            self.assertEqual(get('/app.bundle.js')[0], 200)
+            self.assertEqual(get('/app.css')[0], 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
     def test_http_rejects_cross_origin_bad_host_and_no_token(self):
         server=web.LocalHTTPServer(('127.0.0.1',0),web.Handler);server.controller=self.c

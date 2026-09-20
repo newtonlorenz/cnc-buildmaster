@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local supervised UGS mapping UI. --demo never contacts UGS or exports measurements."""
+"""Local supervised UGS mapping UI. --offline prepares jobs; --demo simulates a machine."""
 import argparse
 import base64
 import copy
@@ -12,29 +12,49 @@ import secrets
 import signal
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
-from surface_config import load_config
+from surface_config import load_config, offline_data_dir
+from agent_api import AgentGateway, AgentError, Discovery
 
 from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, save_plan, positioning_rectangle, taught_rectangle, finite
 from cnc_map_support import fault_details, scan_route, corner_issue
 from pcb_workspace import Workspace
+from job_actions import ACTIONS as JOB_ACTIONS, perform as job_action
+from job_workflow import scan_area, fingerprint, plan_status, configure_workflow, map_source_current, preparation_view
 
 ASSETS = Path(__file__).with_name('cnc-map-web')
+MAX_JOB_PACKAGE_BYTES = 24_000_000
+OFFLINE_REASON = ('Offline preparation has no machine connection or verified machine configuration. '
+                  'Save the planning job, then restart without --offline using your completed '
+                  'CNC_BUILDMASTER_CONFIG and establish fresh machine references.')
+# Explicitly allow digital operations; future machine endpoints fail closed by default.
+OFFLINE_ACTIONS = frozenset({
+    'stop', 'pcb-import', 'pcb-configure', 'pcb-operation', 'pcb-reference',
+    'pcb-solve', 'pcb-new', 'pcb-load', 'pcb-example', 'pcb-save', 'pcb-workflow',
+    'pcb-fixture', 'pcb-fixture-check', 'pcb-camera', 'pcb-recipe', 'pcb-vbit', 'pcb-tool-note',
+})
+
+
+def json_bytes(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
 
 
 class Controller:
-    def __init__(self, demo=False):
+    def __init__(self, demo=False, offline=False):
         self.demo = demo
-        self.profile = load_config(demo=demo)
+        self.offline = offline
+        self.mode = 'offline' if offline else 'demo' if demo else 'real'
+        self.profile = load_config(demo=demo, offline=offline)
         self.lock = threading.Lock()
         self.action_lock = threading.Lock()
         self.pcb_lock = threading.RLock()
         self.pcb = Workspace()
         self.jobs_dir = Path(self.profile['dataDir'])/'jobs'
-        if not demo:
+        if not demo and not offline:
             self.jobs_dir.parent.mkdir(parents=True, exist_ok=True)
         self.child = None
         self.monitor = None
@@ -42,8 +62,9 @@ class Controller:
         self.monitor_closing = False
         self.token = secrets.token_urlsafe(32)
         self.owner = None
+        self.revoked_owners = set()
         self.last_seen = 0
-        self.data = dict(demo=demo, armed=False, busy=False, phase='setup', corners=[], plan=None,
+        self.data = dict(demo=demo, offline=offline, mode=self.mode, armed=False, busy=False, phase='setup', corners=[], plan=None,
                          prompt=None, logs=[], error=None, status=None, result=None, measurements=[], currentPoint=None)
         self.snapshots = {}
         self.plan_path = None
@@ -55,14 +76,39 @@ class Controller:
         self.hold_released = True
         self.hold_at = 0
         self.released_holds = deque(maxlen=256)
-        limits = self.profile['baseline']
-        maxima = {axis: float(limits[str(key)]) for axis,key in zip('xyz',(110,111,112))}
-        self.speeds = {name: {a: min(maxima[a], rate[i]) for i,a in enumerate('xyz')} for name,rate in
-                       {'slow': (100,100,10), 'normal': (600,600,60), 'fast': (1000,1000,100), 'maximum': (maxima['x'],maxima['y'],maxima['z'])}.items()}
+        self.speeds = {}
+        if not offline:
+            limits = self.profile['baseline']
+            maxima = {axis: float(limits[str(key)]) for axis,key in zip('xyz',(110,111,112))}
+            self.speeds = {name: {a: min(maxima[a], rate[i]) for i,a in enumerate('xyz')} for name,rate in
+                           {'slow': (100,100,10), 'normal': (600,600,60), 'fast': (1000,1000,100), 'maximum': (maxima['x'],maxima['y'],maxima['z'])}.items()}
         self.data.update(speeds=self.speeds, hold=None, nativeJog=demo, area=None,
-                         configuration={'name': self.profile['name'], 'puckHeight': self.profile['puckHeight'], 'ugsPort': self.profile['ugsPort'], 'feeds': self.profile['feeds']}, apiVersion=6, sessionId=secrets.token_hex(16), fault=None, diagnostics=None,
-                         geometryIssue=None, route=None, planId=None, scanStarted=None)
-        threading.Thread(target=self.watchdog, daemon=True).start()
+                         configuration={'name': self.profile['name'], 'configured': self.profile['configured'], 'puckHeight': self.profile.get('puckHeight'), 'ugsPort': self.profile.get('ugsPort'), 'feeds': self.profile.get('feeds', {})}, apiVersion=7, sessionId=secrets.token_hex(16), fault=None, diagnostics=None,
+                         geometryIssue=None, route=None, planId=None, scanStarted=None, probeMode="puck", mapSource=None, handoff=None, jobSetupEpoch=0, continuityActive=False, preparationClosed=False)
+        if offline:
+            self.data.update(planningOnly=True, machineUnavailableReason=OFFLINE_REASON)
+        self.agent = AgentGateway(self)
+        if not offline:
+            threading.Thread(target=self.watchdog, daemon=True).start()
+
+    def require_machine_mode(self):
+        if self.offline:
+            raise ValueError(OFFLINE_REASON)
+
+    def check_offline_action(self, action):
+        if self.offline and action not in OFFLINE_ACTIONS:
+            raise ValueError(OFFLINE_REASON)
+
+    def check_jobs_dir(self):
+        if self.offline and self.jobs_dir != offline_data_dir()/'jobs':
+            raise ValueError('Offline jobs must stay in the separate offline preparation directory')
+
+    def pcb_public(self, include_paths=True):
+        data = self.pcb.public(None if self.offline else self.data['sessionId'], include_paths=include_paths)
+        data['hasContent'] = self.pcb.has_content()
+        if self.offline:
+            data.update(mode='offline', offline=True, planningOnly=True, canExport=False)
+        return data
 
     def log(self, message):
         with self.lock:
@@ -74,13 +120,23 @@ class Controller:
         with self.lock:
             data = copy.deepcopy(self.data)
             data['canStartFresh'] = self.can_start_fresh()
-        with self.pcb_lock:
+            # This scalar is an invalidation hint, not a coherent job snapshot
+            # or mutation authority. Never block the heartbeat on CAM geometry.
+            # Writes still check the supplied revision under pcb_lock.
             data['pcbRevision'] = self.pcb.revision
+        data['agent'] = self.agent.public()
         return data
 
-    def pcb_state(self):
+    def pcb_state(self, include_paths=True):
         with self.pcb_lock:
-            data = self.pcb.public(self.data['sessionId'])
+            self.check_jobs_dir()
+            data = self.pcb_public(include_paths=include_paths)
+            # Share detached immutable geometry only within this locked read.
+            # Session/alignment/map authority is checked afresh by each consumer.
+            preview = preparation_view(data)
+            data['guide'] = plan_status(self.pcb, self.data['sessionId'], self.data, preview=preview)
+            try: data['scanProposal'] = scan_area(self.pcb, preview=preview)
+            except ValueError as e: data['scanProposal'] = {'error':str(e)}
             data['savedJobs'] = [] if self.demo else [
                 {'id': p.name, 'label': p.stem.replace('.pcb-job', '')}
                 for p in sorted(self.jobs_dir.glob('*.pcb-job.json'), reverse=True)[:50]
@@ -88,41 +144,95 @@ class Controller:
             return data
 
     def save_pcb_package(self, recovery=False):
-        package = self.pcb.package(self.data['sessionId'])
+        self.check_jobs_dir()
+        package = self.pcb.package(None if self.offline else self.data['sessionId'])
+        if self.offline:
+            package.update(mode='offline', offline=True, planningOnly=True)
+            package['job'] = self.pcb_public(include_paths=False)
+        encoded = json_bytes(package)
+        if len(encoded) > MAX_JOB_PACKAGE_BYTES:
+            raise ValueError('Job package exceeds the 24 MB UTF-8 limit. Split the job before saving.')
         if self.demo:
             return {'package': package, 'savedPath': None}
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         slug = re.sub('[^a-zA-Z0-9]+', '-', self.pcb.name).strip('-')[:40] or 'pcb'
         filename = time.strftime('%Y%m%dT%H%M%S')+'-'+('recovery-' if recovery else '')+slug+'-'+secrets.token_hex(4)+'.pcb-job.json'
         path = self.jobs_dir/filename
-        with path.open('x') as f:
-            json.dump(package, f, indent=2)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='wb', dir=self.jobs_dir, prefix='.'+filename+'-',
+                                             suffix='.tmp', delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Publish a complete sibling atomically, without replacing an existing job.
+            os.link(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink()
         if not recovery:
             self.pcb.last_saved = str(path); self.pcb.changed()
         return {'package': package, 'savedPath': str(path)}
 
     def replace_pcb(self, candidate):
-        if self.pcb.operations:
+        if self.pcb.has_content():
             self.save_pcb_package(recovery=True)
         candidate.revision = self.pcb.revision+1
         self.pcb = candidate
 
     def perform_pcb(self, action, body):
+        self.check_offline_action(action)
         if self.data['busy']:
             raise ValueError('Wait for the current machine operation before editing the PCB job')
         with self.pcb_lock:
             if body.get('pcbRevision') != self.pcb.revision:
                 raise ValueError('The PCB job changed. Review the current preview and try again.')
-        live = action in ('pcb-capture', 'pcb-stock-from-area', 'pcb-export')
+        live = action in ('pcb-capture', 'pcb-stock-from-area', 'pcb-export', 'pcb-map-job')
+        completed_export = action == 'pcb-export' and self.data['phase'] == 'complete'
         s = None
         if live:
-            if self.stopped or not self.data['armed'] or self.data['phase'] != 'teach':
+            if completed_export:
+                self.require_continuity()
+                if self.data.get('mapSource') and not map_source_current(self.pcb, self.data['sessionId'], self.data):
+                    raise ValueError('Job setup changed after measuring. Recheck alignment and surface coverage.')
+            elif self.stopped or not self.data['armed'] or self.data['phase'] != 'teach':
                 raise ValueError('Enable teaching with a fresh setup before using machine references')
             s = self.checked()
         with self.pcb_lock:
             if live and self.stopped:
                 raise ValueError('Machine session stopped')
-            if action == 'pcb-import':
+            if action in JOB_ACTIONS:
+                result = job_action(self.pcb, action, body, self.profile, self.demo)
+                if self.offline and isinstance(result, dict):
+                    result.update(planningOnly=True, machineConfigurationVerified=False)
+                return result
+            elif action == 'pcb-workflow':
+                configure_workflow(self.pcb, body.get('settings'))
+            elif action == 'pcb-map-job':
+                if body.get('reviewed') is not True or not self.pcb.valid_alignment(self.data['sessionId']):
+                    raise ValueError('Check live board alignment and confirm support and travel clearance first')
+                proposal=scan_area(self.pcb, body.get('margin',1))
+                if proposal['fingerprint'] != body.get('fingerprint'):
+                    raise ValueError('Job geometry changed. Review the updated scan proposal.')
+                if self.pcb.workflow['sourceCompensation'] != 'none':
+                    raise ValueError('Confirm the source files have no height compensation before planning a new map')
+                proposal['setupEpoch'] = self.data['jobSetupEpoch']
+                area=proposal['area']; completed={}
+                for name in CORNERS:
+                    snap=copy.deepcopy(s); fb,lr=name.split('-')
+                    for axis,index in [('x',int(lr=='right')),('y',int(fb=='back'))]:
+                        offset=s['status']['machineCoord'][axis]-s['status']['workCoord'][axis]
+                        snap['status']['machineCoord'][axis]=area[axis][index]
+                        snap['status']['workCoord'][axis]=area[axis][index]-offset
+                    snap['cornerSource']='job'; completed[name]=snap
+                with self.lock:
+                    if self.stopped:raise ValueError('Session stopped before accepting the job area')
+                    self.snapshots=completed
+                    self.data.update(corners=[dict(name=n,source='job',**position(completed[n])[0]) for n in CORNERS],
+                                     area=area,geometryIssue=None,mapSource=proposal,probeMode=proposal['probeMode'])
+                    self.invalidate_plan()
+            elif action == 'pcb-import':
                 self.pcb.import_files(body.get('files'))
             elif action == 'pcb-configure':
                 self.pcb.configure(body.get('settings'))
@@ -134,7 +244,7 @@ class Controller:
                 m, _ = position(s)
                 self.pcb.reference(body.get('label'), body.get('design'), [m['x'], m['y']], self.data['sessionId'])
             elif action == 'pcb-solve':
-                self.pcb.solve(self.data['sessionId'])
+                self.pcb.solve(None if self.offline else self.data['sessionId'])
             elif action == 'pcb-stock-from-area':
                 area = positioning_rectangle(self.snapshots)
                 self.pcb.stock.update(x=area['x'][0], y=area['y'][0], width=area['x'][1]-area['x'][0], height=area['y'][1]-area['y'][0])
@@ -144,13 +254,14 @@ class Controller:
             elif action == 'pcb-load':
                 package = body.get('package')
                 if 'savedId' in body:
+                    self.check_jobs_dir()
                     name = body['savedId']
                     if self.demo or not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]+\.pcb-job\.json', name):
                         raise ValueError('Invalid saved job')
                     path = self.jobs_dir/name
-                    if path.is_symlink() or path.stat().st_size > 24_000_000:
+                    if path.is_symlink() or path.stat().st_size > MAX_JOB_PACKAGE_BYTES:
                         raise ValueError('Saved job is unavailable or too large')
-                    package = json.loads(path.read_text())
+                    package = json.loads(path.read_text(encoding='utf-8'))
                 candidate = Workspace.from_package(package)
                 self.replace_pcb(candidate)
             elif action == 'pcb-example':
@@ -167,24 +278,53 @@ class Controller:
                 if body.get('reviewed') is not True:
                     raise ValueError('Review the stock, cutter, orientation and draft-export checks')
                 _, offset = position(s)
-                data = self.pcb.export(self.data['sessionId'], offset, self.demo)
+                data = self.pcb.export(self.data['sessionId'], offset, self.demo, profile=self.profile)
+                if completed_export: self.require_continuity()
                 if self.stopped: raise ValueError('Session stopped while preparing the draft')
                 return {'archive': base64.b64encode(data).decode(), 'filename': 'pcb-aligned-draft.zip'}
             else:
                 raise ValueError('Unknown PCB action')
 
+    def job_setup_signature(self):
+        with self.pcb_lock:
+            return (id(self.pcb), fingerprint(self.pcb), self.pcb.tolerance,
+                    json.dumps([self.pcb.references, self.pcb.alignment], sort_keys=True, allow_nan=False))
+
+    def invalidate_job_surface(self):
+        # A later edit back to the same geometry cannot resurrect an old map/plan.
+        with self.lock:
+            self.data['jobSetupEpoch'] += 1
+            source = self.data.get('mapSource')
+            if source:
+                source['invalidated'] = True
+                if self.data['phase'] == 'teach':
+                    self.snapshots = {}
+                    self.data.update(corners=[], area=None, geometryIssue=None)
+                    self.invalidate_plan()
+                if self.data.get('handoff'):
+                    self.data['handoff'] = {**self.data['handoff'], 'verified':False,
+                        'historicalReadbackVerified': self.data['handoff'].get('verified') is True,
+                        'reason':'The job setup changed after import.'}
+
+    def require_continuity(self):
+        if (self.stopped or self.data.get('preparationClosed') or not self.data.get('continuityActive')
+                or (not self.demo and (self.monitor_closing or not self.monitor or self.monitor.poll() is not None))):
+            raise ValueError('Reference monitoring is no longer active. Establish a fresh setup before using machine references.')
+
     def can_start_fresh(self):
         return (self.data['phase'] in ('stopped', 'complete') and not self.data['busy']
                 and not self.action_lock.locked()
                 and not (self.child and self.child.poll() is None)
-                and not (self.monitor and self.monitor.poll() is None)
-                and not (self.monitor_thread and self.monitor_thread.is_alive()))
+                and (self.data['phase'] == 'complete' or
+                     (not (self.monitor and self.monitor.poll() is None)
+                      and not (self.monitor_thread and self.monitor_thread.is_alive()))))
 
     def invalidate_plan(self):
         self.data.update(plan=None, route=None, planId=None)
         self.plan_path = None
 
     def diagnostics(self):
+        self.require_machine_mode()
         checks = []
         def add(label, ok, detail):
             checks.append(dict(label=label, ok=ok, detail=detail))
@@ -219,6 +359,7 @@ class Controller:
         return self.data['diagnostics']
 
     def read_machine(self):
+        self.require_machine_mode()
         if self.demo:
             m = dict(self.demo_position, units='MM')
             return dict(listener={'pid': -1, 'listen': 'DEMO'}, file={'fileName': ''},
@@ -240,6 +381,7 @@ class Controller:
         return s
 
     def start_monitor(self):
+        self.require_machine_mode()
         if self.demo:
             return
         ready = threading.Event()
@@ -279,6 +421,7 @@ class Controller:
 
     def close_monitor(self):
         self.monitor_closing = True
+        self.data['continuityActive'] = False
         monitor = self.monitor
         if monitor and monitor.poll() is None:
             try: monitor.send_signal(signal.SIGTERM)
@@ -287,6 +430,10 @@ class Controller:
             monitor.stdin.close()
 
     def stop(self, reason='Operator pressed Stop'):
+        self.agent.cancel()
+        if self.offline:
+            self.log('Offline preparation: no machine is connected; no stop command was sent.')
+            return
         with self.lock:
             # Preserve the first cause; worker shutdown errors are secondary evidence.
             first = not self.stopped
@@ -307,20 +454,61 @@ class Controller:
     def watchdog(self):
         while not self.closed:
             time.sleep(.25)
-            if self.data['armed'] and time.monotonic()-self.last_seen > 3:
+            if (self.data['armed'] or self.data.get('continuityActive')) and time.monotonic()-self.last_seen > 3:
                 self.stop('Browser heartbeat lost; setup invalidated')
 
     def authenticate(self, token, owner):
         if not secrets.compare_digest(token or '', self.token) or not owner or len(owner) > 128:
             raise PermissionError('Invalid local session')
         with self.lock:
+            if owner in self.revoked_owners:
+                raise PermissionError('This tab ownership was revoked. Use the recovered tab.')
             if self.owner is None:
                 self.owner = owner
             if owner != self.owner:
                 raise PermissionError('Another tab owns this session; use the original tab')
             self.last_seen = time.monotonic()
 
+    def recover_ownership(self, token, owner, confirmed):
+        if not secrets.compare_digest(token or '', self.token) or not owner or len(owner) > 128:
+            raise PermissionError('Invalid local session')
+        if confirmed is not True:
+            raise ValueError('Confirm recovery and clearing old machine references')
+        if not self.action_lock.acquire(blocking=False):
+            raise ValueError('Wait for the current operation to finish before recovery')
+        try:
+            with self.lock:
+                if owner in self.revoked_owners:
+                    raise PermissionError('This tab ownership was revoked. Use the recovered tab.')
+                if owner == self.owner:
+                    raise ValueError('This tab already owns the session')
+                if self.owner and time.monotonic()-self.last_seen <= 3:
+                    raise ValueError('The original tab is still active. Use it or close it before recovery.')
+                if (self.data['armed'] or self.data['busy'] or self.data.get('continuityActive')
+                    or (self.child and self.child.poll() is None)
+                    or (self.monitor and self.monitor.poll() is None)
+                    or (self.monitor_thread and self.monitor_thread.is_alive())):
+                    raise ValueError('Wait for the old setup and all machine workers to stop before recovery')
+                if self.owner: self.revoked_owners.add(self.owner)
+                self.owner = owner
+                self.last_seen = time.monotonic()
+                self.snapshots = {}; self.expected = None; self.plan_path = None
+                self.hold_id = None; self.hold_released = True; self.stopped = False
+                self.data.update(armed=False, busy=False, phase='setup', sessionId=secrets.token_hex(16),
+                    corners=[], plan=None, route=None, planId=None, area=None, geometryIssue=None,
+                    prompt=None, status=None, result=None, measurements=[], currentPoint=None,
+                    error=None, fault=None, diagnostics=None, hold=None, scanStarted=None,
+                    copperApproved=False, mapSource=None, handoff=None, continuityActive=False, preparationClosed=False)
+            with self.pcb_lock:
+                self.pcb.invalidate('Browser ownership recovered. Capture fresh machine references before export.')
+            self.invalidate_job_surface()
+            self.log('Closed-tab session recovered. Preparation records kept; old physical references cleared.')
+            return {'sessionId':self.data['sessionId'], 'referencesRestored':False}
+        finally:
+            self.action_lock.release()
+
     def launch(self, command, stdin=None, scan=False):
+        self.require_machine_mode()
         env = dict(os.environ, UGS_MAP_WEB_TOKEN=self.token)
         failure_reason = None
         last_diagnostic = None
@@ -394,12 +582,14 @@ class Controller:
                     saved.get('offsetsPreserved') is not True or saved.get('appliedInUgs') is not False or
                     not result_path.read_text().strip()):
                 raise ValueError('Scan result is incomplete or has unverified acceptance')
+            scan_result['acceptedHashes']={name:hashlib.sha256(result_path.with_name(name).read_bytes()).hexdigest() for name in ('surface.xyz','config.json','result.json','ugs-handoff.json')}
             with self.lock:
                 if self.stopped:
                     raise ValueError('Session stopped before accepting the saved map')
                 self.data['result'] = scan_result
 
     def hold_control(self, action, body):
+        self.require_machine_mode()
         hold_id=body.get('id')
         if not isinstance(hold_id,str) or not 8 <= len(hold_id) <= 80:
             raise ValueError('Invalid hold ID')
@@ -419,9 +609,11 @@ class Controller:
             if self.child and self.child.poll() is None:
                 self.child.stdin.write(json.dumps(message)+'\n');self.child.stdin.flush()
 
-    def perform(self, action, body, session_id=None):
+    def perform(self, action, body, session_id=None, *, actor='browser', agent_request=None):
+        cancel_epoch = self.agent.cancel_epoch
         if not isinstance(body, dict):
             raise ValueError('Expected a JSON object')
+        self.check_offline_action(action)
         if action == 'stop':
             self.stop(); return
         if session_id is not None and session_id != self.data['sessionId']:
@@ -440,31 +632,57 @@ class Controller:
                     self.child.stdin.write(json.dumps(dict(id=p['id'], answer=body['answer'], token=self.token))+'\n')
                     self.child.stdin.flush()
             if self.demo:
-                self.demo_next()
+                if p['expected'] == 'start copper scan':
+                    threading.Thread(target=self.demo_copper, daemon=True).start()
+                else:
+                    self.demo_next()
             return
         if not self.action_lock.acquire(blocking=False):
             raise ValueError('An operation is already in progress')
         try:
             if session_id is not None and session_id != self.data['sessionId']:
                 raise ValueError('This request belongs to an old setup. Refresh the page.')
+            if actor == 'agent':
+                self.agent.check_prepare(action)
+            elif self.agent.prepare_enabled:
+                raise ValueError('Pause agent preparation before editing or controlling the machine in the browser')
+            if agent_request is not None:
+                self.agent.check_request(agent_request)
             if action.startswith('pcb-'):
-                return self.perform_pcb(action, body)
+                before = self.job_setup_signature()
+                try:
+                    return self.perform_pcb(action, body)
+                finally:
+                    if self.job_setup_signature() != before:
+                        self.invalidate_job_surface()
             if action == 'new-session':
+                if (self.data['phase'] == 'complete' and not self.data['busy']
+                    and not (self.child and self.child.poll() is None)):
+                    # The explicit new-map action can retire a read-only observer.
+                    # A running motion worker still prevents replacement.
+                    self.close_monitor()
+                    if self.monitor_thread: self.monitor_thread.join(timeout=2)
+                    if self.monitor and self.monitor.poll() is None:
+                        self.monitor.wait(timeout=2)
                 if (self.data['phase'] not in ('stopped', 'complete') or self.data['busy']
                     or (self.child and self.child.poll() is None)
                     or (self.monitor and self.monitor.poll() is None)
                     or (self.monitor_thread and self.monitor_thread.is_alive())):
                     raise ValueError('Wait for all workers to stop before starting a fresh setup')
-                self.snapshots = {}; self.expected = None; self.plan_path = None
-                self.child = None; self.monitor = None; self.monitor_thread = None
-                self.hold_id = None; self.hold_released = True
-                self.stopped = False
-                with self.pcb_lock:
-                    self.pcb.invalidate('New machine setup. Saved job remains; machine references were discarded.')
-                self.data.update(armed=False, busy=False, phase='setup', sessionId=secrets.token_hex(16),
-                                 corners=[], plan=None, route=None, planId=None, area=None, geometryIssue=None,
-                                 prompt=None, status=None, result=None, measurements=[], currentPoint=None,
-                                 error=None, fault=None, diagnostics=None, hold=None, scanStarted=None)
+                with self.agent.lock:
+                    # Stop bypasses action_lock. A delayed reset must not undo it.
+                    self.agent.check_epoch(cancel_epoch)
+                    if agent_request is not None: self.agent.check_request(agent_request)
+                    self.snapshots = {}; self.expected = None; self.plan_path = None
+                    self.child = None; self.monitor = None; self.monitor_thread = None
+                    self.hold_id = None; self.hold_released = True
+                    self.stopped = False
+                    with self.pcb_lock:
+                        self.pcb.invalidate('New machine setup. Saved job remains; machine references were discarded.')
+                    self.data.update(armed=False, busy=False, phase='setup', sessionId=secrets.token_hex(16),
+                                     corners=[], plan=None, route=None, planId=None, area=None, geometryIssue=None,
+                                     prompt=None, status=None, result=None, measurements=[], currentPoint=None,
+                                     error=None, fault=None, diagnostics=None, hold=None, scanStarted=None, copperApproved=False, mapSource=None, handoff=None, continuityActive=False, preparationClosed=False)
                 self.log('Fresh setup opened. Previous coordinates were discarded; teaching is not enabled.')
                 return
             if action == 'diagnostics':
@@ -474,6 +692,54 @@ class Controller:
                 raise ValueError('Session stopped. Start a fresh setup after inspection.')
             if self.data['busy']:
                 raise ValueError('Wait for the current operation')
+            if action == 'surface-import':
+                if self.demo or self.stopped or self.data['phase'] != 'complete' or self.data['busy']:
+                    raise ValueError('Native import requires a completed, accepted real scan in this setup')
+                self.require_continuity()
+                source=self.data.get('mapSource')
+                if source and not map_source_current(self.pcb, self.data['sessionId'], self.data):
+                    raise ValueError('Job changed since this map. Review coverage and measure the current setup.')
+                from job_handoff import accepted_payload
+                from ugs_surface_bridge import SurfaceBridge
+                self.data['handoff']=None
+                payload=accepted_payload(self.data.get('result'), self.profile['dataDir'])
+                import_session=self.data['sessionId']
+                def valid_import():
+                    if self.stopped or self.data['phase'] != 'complete' or self.data['sessionId'] != import_session:
+                        raise ValueError('Setup stopped or changed during import. Inspect the native map in UGS.')
+                    self.require_continuity()
+                def guard():
+                    with self.lock: valid_import()
+                    if load_config() != self.profile:
+                        raise ValueError('Machine configuration changed since scanning')
+                    self.checked()
+                    with self.lock: valid_import()
+                    return True
+                bridge=SurfaceBridge(f"http://127.0.0.1:{self.profile['ugsPort']}/api/v1", guard=guard)
+                result=bridge.import_map(payload)
+                with self.lock:
+                    valid_import()
+                    self.data['handoff']={'verified':True,'sha256':payload['sha256'],
+                        'compensationApplied':False,'continuityVerified':False,'materialZVerified':False}
+                self.log('Native AutoLeveler import read back and verified. Material Z, physical continuity and compensated file remain unverified.')
+                return self.data['handoff']
+            if action == 'handoff-finish':
+                if self.data['phase'] != 'complete' or self.data.get('preparationClosed'):
+                    raise ValueError('Finish an accepted surface measurement before closing preparation')
+                self.require_continuity()
+                self.checked()
+                with self.lock:
+                    if self.stopped: raise ValueError('Session stopped before closing preparation')
+                    self.data.update(preparationClosed=True, armed=False)
+                self.close_monitor()
+                self.log('Preparation closed. Reference monitoring ended; continue file and compensation review in UGS.')
+                return {'preparationClosed':True,'cuttingReleased':False}
+            if action == 'probe-mode':
+                if self.data['phase'] not in ('setup', 'teach') or body.get('mode') not in ('puck', 'copper'):
+                    raise ValueError('Choose a probing method before scanning')
+                self.data['probeMode'] = body['mode']
+                self.invalidate_plan()
+                return
             if action == 'arm':
                 if self.data['phase'] != 'setup':
                     raise ValueError('Session already started')
@@ -508,7 +774,7 @@ class Controller:
                 with self.lock:
                     can_arm=not self.stopped and time.monotonic()-self.last_seen <= 3
                     if can_arm:
-                        self.data.update(armed=True, phase='teach')
+                        self.data.update(armed=True, phase='teach', continuityActive=True)
                 if not can_arm:
                     self.stop('Browser connection lost during startup')
                     raise ValueError('Session stopped or browser connection lost during startup')
@@ -665,6 +931,7 @@ class Controller:
                     s['cornerSource']='entered'
                 else:
                     s['cornerSource']='captured'
+                self.data['mapSource']=None
                 self.snapshots[name]=s
                 self.data['corners']=[dict(name=name,source=self.snapshots[name].get('cornerSource','captured'),**position(self.snapshots[name])[0]) for name in CORNERS if name in self.snapshots]
                 self.invalidate_plan();self.data.update(area=None, geometryIssue=corner_issue(self.data['corners']))
@@ -675,7 +942,7 @@ class Controller:
             elif action == 'reset-corners':
                 if self.data['phase'] != 'teach':
                     raise ValueError('Cannot change an active scan')
-                self.checked(); self.snapshots = {}; self.data.update(corners=[], area=None, geometryIssue=None); self.invalidate_plan()
+                self.checked(); self.snapshots = {}; self.data.update(corners=[], area=None, geometryIssue=None, mapSource=None); self.invalidate_plan()
                 with self.pcb_lock:
                     self.pcb.invalidate('Taught setup cleared. Recheck PCB alignment.')
             elif action == 'plan':
@@ -683,12 +950,15 @@ class Controller:
                     raise ValueError('Cannot change an active scan')
                 self.invalidate_plan()
                 current=self.checked()
-                config = make_config(self.snapshots, body.get('spacing'),current,self.profile)
+                source=self.data.get('mapSource')
+                if source and not map_source_current(self.pcb, self.data['sessionId'], self.data):
+                    raise ValueError('Job changed after choosing the scan area. Use Map this job again.')
+                config = make_config(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'])
                 if self.demo:
                     self.data['plan'] = config
                     self.data['route'] = scan_route(config)
                 else:
-                    path = save_plan(self.snapshots, body.get('spacing'),current,self.profile)
+                    path = save_plan(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'])
                     output = subprocess.check_output(['node', str(ROOT/'scripts/ugs_puck_map.mjs'), '--config', str(path)], cwd=ROOT, text=True, timeout=10)
                     planned = json.loads(output)
                     self.data.update(plan=planned['config'], route=planned['route']); self.plan_path = path
@@ -698,8 +968,11 @@ class Controller:
                     raise ValueError('Preview a valid grid before scanning')
                 if body.get('planId') != self.data['planId']:
                     raise ValueError('The scan preview changed. Review the current grid before starting.')
+                if self.data.get('mapSource') and not map_source_current(self.pcb, self.data['sessionId'], self.data):
+                    raise ValueError('Job changed. Review the job scan area again.')
                 self.checked(); self.data.update(busy=True, phase='scan', scanStarted=time.time(), measurements=[], currentPoint=None)
                 if self.demo:
+                    self.data['copperApproved']=False
                     self.demo_index = -2; self.demo_next()
                     return
                 def scan():
@@ -708,7 +981,8 @@ class Controller:
                         with self.lock:
                             if not self.stopped:
                                 self.data.update(phase='complete', armed=False)
-                        self.close_monitor()
+                        # Keep the observer through draft export and native import.
+                        # Explicit handoff-finish releases it before UGS file selection.
                     except Exception as e:
                         self.stop(str(e))
                     finally:
@@ -719,7 +993,18 @@ class Controller:
         finally:
             self.action_lock.release()
 
+    def demo_copper(self):
+        self.require_machine_mode()
+        total = len(self.data['route']['points'])
+        # One explicit route approval; Stop/heartbeat remains active for every point.
+        while not self.stopped and self.demo_index <= total:
+            time.sleep(.12)
+            if self.stopped: return
+            self.demo_next()
+            if self.demo_index <= total: self.data['prompt'] = None
+
     def demo_next(self):
+        self.require_machine_mode()
         plan = self.data['plan']; total=len(plan['grid']['x'])*len(plan['grid']['y'])+1
         if 1 <= self.demo_index <= total:
             p = self.data['route']['points'][self.demo_index-1]
@@ -731,7 +1016,11 @@ class Controller:
         if self.demo_index == -1:
             text, answer = 'DEMO: Confirm the displayed grid and clear traverse height. Real mode lists the physical startup checks.', 'confirm startup'
         elif self.demo_index == 0:
-            text, answer = 'DEMO: Touch and release puck against the stationary tool twice. Real mode verifies the electrical input.', 'contact ready'
+            text, answer = ('DEMO: Verify contact and release using a loose conductive test piece on the same probe circuit.' if self.data['probeMode']=='copper' else 'DEMO: Touch and release puck against the stationary tool. Real mode verifies the electrical input.'), 'contact ready'
+        elif self.data['probeMode'] == 'copper' and self.demo_index == 1 and not self.data.get('copperApproved'):
+            self.data['copperApproved'] = True
+            self.demo_index = 0
+            text, answer = 'DEMO: Start the complete copper scan. Real mode checks copper continuity and requires a clear, reviewed route.', 'start copper scan'
         elif self.demo_index <= total:
             point = self.data['route']['points'][self.demo_index-1]
             self.data['currentPoint'] = dict(index=self.demo_index, total=total, point=point)
@@ -750,14 +1039,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def send(self, code, content, content_type='application/json'):
-        data = content if isinstance(content, bytes) else json.dumps(content).encode()
+    def send(self, code, content, content_type='application/json', style_nonce=None):
+        data = content if isinstance(content, bytes) else json_bytes(content)
         self.send_response(code)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        # Only styles created by this page's component library receive this nonce.
+        # Script sources and arbitrary inline style/script restrictions stay intact.
+        nonce_source = f" 'nonce-{style_nonce}'" if style_nonce else ''
+        self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self'; style-src 'self'{nonce_source}; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         self.send_header('Permissions-Policy', 'camera=(self), microphone=()')
         self.end_headers(); self.wfile.write(data)
 
@@ -774,21 +1066,36 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if self.path.startswith('/api/agent/'):
+                self.guard()
+                self.server.controller.agent.authenticate(self.headers.get('Authorization','').removeprefix('Bearer '))
+                if self.path != '/api/agent/capabilities':
+                    raise AgentError('NOT_FOUND', 'Use the discovered tools through /api/agent/call')
+                self.send(200, self.server.controller.agent.capabilities())
+                return
             self.guard(self.path.startswith('/api/'))
             if self.path in ('/api/state', '/api/report'):
                 data = self.server.controller.state()
                 if self.path == '/api/report':
                     with self.server.controller.pcb_lock:
-                        data['pcb'] = self.server.controller.pcb.public(data['sessionId'], include_paths=False)
+                        data['pcb'] = self.server.controller.pcb_public(include_paths=False)
                 self.send(200, data)
                 return
             if self.path == '/api/pcb':
                 self.send(200, self.server.controller.pcb_state())
                 return
-            asset = {'/': ('index.html','text/html; charset=utf-8'), '/app.js': ('app.js','text/javascript'), '/pcb.js': ('pcb.js','text/javascript'), '/camera.js': ('camera.js','text/javascript'), '/style.css': ('style.css','text/css'), '/workbench.js': ('workbench.js','text/javascript')}.get(self.path)
+            if self.path.startswith('/api/'):
+                self.server.controller.require_machine_mode()
+            asset = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.bundle.js': ('app.bundle.js', 'text/javascript'), '/app.css': ('app.css', 'text/css')}.get(self.path)
             if not asset:
                 self.send(404, {'error':'Not found'}); return
-            self.send(200, (ASSETS/asset[0]).read_bytes(), asset[1])
+            content = (ASSETS/asset[0]).read_bytes()
+            style_nonce = secrets.token_urlsafe(24) if self.path == '/' else None
+            if style_nonce:
+                content = content.replace(b'__CSP_NONCE__', style_nonce.encode('ascii'))
+            self.send(200, content, asset[1], style_nonce=style_nonce)
+        except AgentError as e:
+            self.send(403 if e.code == 'UNAUTHORISED' else 400, {'error': {'code': e.code, 'message': str(e), 'retryable': False}})
         except PermissionError as e:
             self.send(403, {'error':str(e)})
         except (ValueError, TypeError, KeyError, OSError) as e:
@@ -796,21 +1103,50 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            self.guard(True)
+            if self.path.startswith('/api/agent/'):
+                self.guard()
+                self.server.controller.agent.authenticate(self.headers.get('Authorization','').removeprefix('Bearer '))
+                if self.path != '/api/agent/call' or self.headers.get('Content-Type') != 'application/json':
+                    raise AgentError('INVALID_REQUEST', 'Expected the JSON agent tool endpoint')
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= MAX_JOB_PACKAGE_BYTES:
+                    raise AgentError('INVALID_REQUEST', 'Invalid agent request size')
+                body = json.loads(self.rfile.read(size))
+                if not isinstance(body, dict) or set(body) != {'name', 'arguments'}:
+                    raise AgentError('INVALID_REQUEST', 'Expected name and arguments')
+                self.send(200, self.server.controller.agent.call(body['name'], body['arguments']))
+                return
+            recovery = self.path == '/api/recover-session'
+            self.guard(not recovery)
             if not self.path.startswith('/api/') or self.headers.get('Content-Type') != 'application/json':
                 raise ValueError('Expected JSON API request')
             size=int(self.headers.get('Content-Length','0'))
-            maximum = 24_000_000 if self.path in ('/api/pcb-import', '/api/pcb-load') else 16384
+            maximum = MAX_JOB_PACKAGE_BYTES if self.path in ('/api/pcb-import', '/api/pcb-load') else 16384
             if not 0 < size <= maximum:
                 raise ValueError('Invalid request size')
             body=json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError('Expected a JSON object')
             action=self.path.removeprefix('/api/')
+            if recovery:
+                result=self.server.controller.recover_ownership(self.headers.get('Authorization','').removeprefix('Bearer '), self.headers.get('X-Client-ID'), body.get('confirmed'))
+                self.send(200, {'ok':True, 'result':result}); return
             if action != 'stop' and not isinstance(body.get('sessionId'), str):
                 raise ValueError('Missing setup ID. Refresh the page.')
+            if action in ('agent-access', 'agent-decide'):
+                if body['sessionId'] != self.server.controller.data['sessionId']:
+                    raise ValueError('This request belongs to an old setup. Refresh the page.')
+                gateway = self.server.controller.agent
+                result = (gateway.access(body.get('enabled'), expected_session=body['sessionId']) if action == 'agent-access' else
+                          gateway.decide(body.get('requestId'), body.get('approve'), body.get('operatorConfirmed')))
+                self.send(200, {'ok':True, 'result':result}); return
             result=self.server.controller.perform(action, body, session_id=body.get('sessionId'))
             self.send(200, {'ok':True, 'result':result})
+        except AgentError as e:
+            if self.path.startswith('/api/agent/'):
+                self.send(403 if e.code == 'UNAUTHORISED' else 400, {'error': {'code': e.code, 'message': str(e), 'retryable': False}})
+            else:
+                self.send(400, {'error': str(e)})
         except PermissionError as e:
             self.send(403, {'error':str(e)})
         except (ValueError, TypeError, KeyError, subprocess.SubprocessError, OSError) as e:
@@ -827,14 +1163,22 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--demo', action='store_true')
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument('--demo', action='store_true')
+    mode.add_argument('--offline', action='store_true')
+    parser.add_argument('--agent-prepare', action='store_true', help='Enable headless preparation at startup; requires --offline')
     parser.add_argument('--port', type=int, default=8765)
     args=parser.parse_args()
-    controller=Controller(args.demo)
+    if args.agent_prepare and not args.offline:
+        parser.error('--agent-prepare requires --offline; enable real-mode preparation in the app')
+    controller=Controller(demo=args.demo, offline=args.offline)
+    if args.agent_prepare: controller.agent.access(True)
     server=LocalHTTPServer(('127.0.0.1', args.port), Handler)
     server.controller=controller; server.host_header=f'127.0.0.1:{server.server_port}'
+    discovery = Discovery(controller.agent, server.server_port, ROOT)
     print(f"Open http://{server.host_header}/#{controller.token}", flush=True)
-    print('DEMO — no hardware access' if args.demo else 'UGS mapping — opening the page does not move the CNC', flush=True)
+    print('OFFLINE preparation — no machine configuration, connection or simulated motion' if args.offline else
+          'DEMO — no hardware access' if args.demo else 'UGS mapping — opening the page does not move the CNC', flush=True)
     def terminate(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, terminate)
@@ -851,6 +1195,7 @@ def main():
             try: controller.monitor.wait(timeout=8)
             except subprocess.TimeoutExpired: print('Read-only monitor did not exit.', flush=True)
         server.server_close()
+        discovery.close()
 
 
 if __name__=='__main__':

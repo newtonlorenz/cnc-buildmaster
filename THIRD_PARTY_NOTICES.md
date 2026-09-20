@@ -18,6 +18,19 @@ This repository does not include compiled UGS binaries.
 Their distributions contain their licence notices.
 `package-lock.json` records the dependency versions.
 
-The desktop UI bundles Lit and Lucide. Their licence text is retained in
+The desktop UI bundles React, Radix primitives, Lucide and source components from AI Elements and shadcn/ui. Their licence text is retained in
 [scripts/cnc-map-ui/THIRD_PARTY_NOTICES.md](scripts/cnc-map-ui/THIRD_PARTY_NOTICES.md)
 and the generated bundle.
+
+
+## Model Context Protocol SDK
+
+The local agent bridge uses the official `@modelcontextprotocol/server` 2.0.0;
+protocol tests use `@modelcontextprotocol/client` 2.0.0. The installed packages
+retain their upstream notices. Their licence file describes the project's
+MIT-to-Apache-2.0 transition; a copy is retained in
+[docs/licenses/MCP-SDK-LICENSE.txt](docs/licenses/MCP-SDK-LICENSE.txt).
+The lockfile pins these packages and their dependencies. They are not bundled
+into the browser application.
+
+Source: https://github.com/modelcontextprotocol/typescript-sdk

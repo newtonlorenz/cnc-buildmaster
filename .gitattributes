@@ -1,2 +1,3 @@
-# Bundled Lit contains significant whitespace inside template-literal regexes.
-scripts/cnc-map-web/workbench.js whitespace=-blank-at-eol linguist-generated=true
+# Generated JavaScript retains whitespace inside dependency template strings.
+scripts/cnc-map-web/app.bundle.js linguist-generated=true whitespace=-blank-at-eol
+scripts/cnc-map-web/app.css linguist-generated=true
