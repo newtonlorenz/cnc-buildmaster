@@ -52,11 +52,17 @@ try {
  const recovered=await second.newPage();recovered.on('pageerror',e=>errors.push(String(e)));await observeTransport(recovered);await recovered.goto(url);
  await recovered.locator('.global-error').getByRole('button',{name:'Connection details'}).click();
  const recoverButton=recovered.getByRole('button',{name:'Recover closed tab & clear references',exact:true});
- // Creating another browser context may hide the original page, pausing its heartbeat.
- // Refresh that owner's real authenticated poll so this check actually tests an active owner.
+ // Background tabs pause polling, and CI may spend >3s scheduling a click.
+ // Refresh the real owner's authenticated poll immediately before forwarding the
+ // recovery request to the real backend. No mocked response or relaxed timeout.
  const ownerHeartbeat=page.waitForResponse(response=>response.url().endsWith('/api/state')&&response.status()===200);
- await page.bringToFront();await ownerHeartbeat;
- await recovered.bringToFront();
+ await page.bringToFront();
+ const ownerHeaders=await (await ownerHeartbeat).request().allHeaders();
+ await recovered.route('**/api/recover-session',async route=>{
+  const heartbeat=await page.request.get(new URL('/api/state',url).href,{headers:ownerHeaders});
+  assert.equal(heartbeat.status(),200);
+  await route.fulfill({response:await route.fetch()});
+ },{times:1});
  await recoverButton.click();await recovered.getByText('The original tab is still active. Use it or close it before recovery.',{exact:true}).waitFor();
  await first.close();await recovered.waitForTimeout(3300);
  await recoverButton.click();await recovered.waitForFunction(()=>window.testTransport.state?.offline && window.testTransport.job?.operations.length===1 && !window.testTransport.pending);
