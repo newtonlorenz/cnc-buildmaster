@@ -29,11 +29,12 @@ export function gridChoices(area) {
   if (!area) return [];
   const side = Math.min(...['x', 'y'].map(a => area[a][1] - area[a][0]));
   return [{label:'Wide', divisions:2}, {label:'Medium', divisions:4}, {label:'Close', divisions:8}].map(option => {
-    // Avoid an invalid sub-0.1 mm boundary interval when rounding a preset.
-    let spacing = Math.max(.1, Math.floor(side / option.divisions * 1000) / 1000);
+    // Round up: rounding down can add a near-duplicate endpoint. Decreasing
+    // until a tiny remainder reaches 0.1 mm only disguises that extra column.
+    let spacing = Math.max(.1, Math.ceil(round(side) / option.divisions * 1000) / 1000);
     let draft = previewGrid(area, spacing);
-    for (let i=0; draft?.error && i<100 && spacing>.1; i++) {
-      spacing = round(spacing - .001); draft = previewGrid(area, spacing);
+    for (let i=0; draft?.error && i<100 && spacing<side; i++) {
+      spacing = round(spacing + .001); draft = previewGrid(area, spacing);
     }
     return {...option, spacing, draft};
   });

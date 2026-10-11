@@ -1,8 +1,13 @@
 # UGS extension
 
 The machine integration needs UGS Platform 2.1.26 on macOS and GRBL 1.1.
-The extension binds the API to `127.0.0.1`, provides finite status values and adds native held-jog cancellation.
+The extension binds the API to `127.0.0.1`, provides finite status values, native held-jog cancellation and guarded native surface-map import.
 Upstream class hashes reject incompatible UGS builds.
+
+The builder always compiles `extensions/ugs/src` from this checkout. An optional
+`ugsExtensionDir` selects the override output/check directory, not a source tree.
+Preserve any existing build before rebuilding, and do not replace or restart a
+live extension during a referenced machine session.
 
 ## Build
 
@@ -61,6 +66,23 @@ Do not enable the unmodified pendant service on a network interface.
 
 The application independently checks the listening address, UGS process identity and extension hashes.
 A successful connection check does not establish material Z zero.
+
+## Native surface import
+
+The bridge protocol and native dependency pins are documented in
+[`extensions/ugs/SURFACE_HANDOFF.md`](../extensions/ugs/SURFACE_HANDOFF.md).
+After a completed, accepted real measurement, close all UGS cutting-file
+documents, open an empty AutoLeveler and disable **Apply to G-code**. Buildmaster's
+**Import accepted map into UGS** transfers the accepted measured grid and verifies
+native readback. It does not apply compensation, change work offsets or start
+motion. Finish Buildmaster preparation before loading a cutting file or changing
+the work reference in UGS.
+
+Keep AutoLeveler closed during custom puck probing. A capability response with
+`importSupported:true` and `open_native_AutoLeveler_required` means the extension
+is loaded and awaiting that window; it is not a missing extension. Native import
+still needs to pass its live state and readback checks. Closing one editor may
+leave another file selected, so close all cutting-file documents before mapping.
 
 ## Status
 

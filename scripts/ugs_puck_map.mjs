@@ -33,9 +33,10 @@ function freeze(o) { if (o && typeof o === 'object') { Object.values(o).forEach(
 
 export function validateConfig(input) {
   const c = structuredClone(input);
-  keys(c, ['version', 'grid', 'start', 'travelZ', 'envelope', 'expectedG54', 'feeds', 'probe', 'puckHeight', 'outputDir', 'probeMode'], 'config');
+  keys(c, ['version', 'edgeInset', 'grid', 'start', 'travelZ', 'envelope', 'expectedG54', 'feeds', 'probe', 'puckHeight', 'outputDir', 'probeMode'], 'config');
   ensure(c.version === 1, 'Expected config version 1');
   xyz(c.start, 'start'); xyz(c.expectedG54, 'expectedG54');
+  if (c.edgeInset !== undefined) { precision(c.edgeInset, 'edgeInset'); ensure(c.edgeInset >= 0, 'edgeInset must be non-negative'); }
   precision(c.travelZ, 'travelZ'); ensure(c.start.z === c.travelZ, 'start.z must equal travelZ; no startup positioning');
   keys(c.grid, ['x', 'y', 'spacing'], 'grid');
   precision(c.grid.spacing, 'grid.spacing'); ensure(c.grid.spacing >= 0.1, 'Grid spacing must be at least 0.1 mm');

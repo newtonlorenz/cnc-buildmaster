@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
 from surface_config import load_config, offline_data_dir
 from agent_api import AgentGateway, AgentError, Discovery
+from surface_history import SurfaceHistory
 
 from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, save_plan, positioning_rectangle, taught_rectangle, finite
 from cnc_map_support import fault_details, scan_route, corner_issue
@@ -88,6 +89,7 @@ class Controller:
         if offline:
             self.data.update(planningOnly=True, machineUnavailableReason=OFFLINE_REASON)
         self.agent = AgentGateway(self)
+        self.history = SurfaceHistory(Path(self.profile["dataDir"])/"surface-history", memory_only=demo)
         if not offline:
             threading.Thread(target=self.watchdog, daemon=True).start()
 
@@ -125,7 +127,74 @@ class Controller:
             # Writes still check the supplied revision under pcb_lock.
             data['pcbRevision'] = self.pcb.revision
         data['agent'] = self.agent.public()
+        data['surfaceHistory'] = self.history.list()
         return data
+
+    def history_identity(self):
+        return hashlib.sha256(json_bytes({k: self.profile.get(k) for k in
+            ('name', 'machine', 'baseline', 'puckHeight')})).hexdigest()
+
+    def checkpoint_surface(self):
+        # No machine I/O, no credentials or saved authority. Demo stays in memory.
+        try:
+            with self.history.lock:
+                with self.lock:
+                    if not self.data['corners']: return
+                    first = next(iter(self.snapshots.values()), None)
+                    item = dict(version=1, id=self.data['sessionId'], updatedAt=time.time(),
+                        phase=self.data['phase'], demo=self.demo, profile=self.history_identity(),
+                        reference=position(first)[1] if first else None,
+                        corners=copy.deepcopy(self.data['corners']), area=copy.deepcopy(self.data['area']),
+                        measurements=copy.deepcopy(self.data['measurements']),
+                        plan=copy.deepcopy(self.data['plan']), route=copy.deepcopy(self.data['route']),
+                        probeMode=self.data['probeMode'], cornerCount=len(self.data['corners']),
+                        measurementCount=len(self.data['measurements']))
+                self.history.save(item)
+                self.data['historyError'] = None
+        except (OSError, ValueError, TypeError) as error:
+            self.data['historyError'] = 'Could not save surface history: ' + str(error)
+
+    def restore_surface(self, body):
+        if self.stopped or not self.data['armed'] or self.data['phase'] != 'teach' or self.data['busy']:
+            raise ValueError('Enable a fresh, idle teaching setup before reusing boundaries')
+        if body.get('confirmed') is not True:
+            raise ValueError('Confirm unchanged stock, workholding and machine XY reference')
+        item = self.history.get(body.get('id'))
+        if item['demo'] != self.demo or item['profile'] != self.history_identity():
+            raise ValueError('Saved machine configuration differs from this setup')
+        s = self.checked()
+        current, offset = position(s)
+        if not isinstance(item.get('reference'), dict) or any(item['reference'].get(a) != offset[a] for a in 'xy'):
+            raise ValueError('XY work offset changed. Re-establish the original reference or teach again')
+        completed = {}
+        corners = item.get('corners')
+        if not isinstance(corners, list) or not 1 <= len(corners) <= 4:
+            raise ValueError('Saved corners are invalid')
+        for corner in corners:
+            name = corner.get('name')
+            if name not in CORNERS or name in completed: raise ValueError('Saved corner names are invalid')
+            point = copy.deepcopy(s)
+            for axis in 'xy':
+                value = corner.get(axis)
+                if type(value) not in (int, float) or abs(finite(value)) > 10000 or abs(value*1000-round(value*1000)) > 1e-6:
+                    raise ValueError('Saved corner coordinates are invalid')
+                point['status']['machineCoord'][axis] = value
+                point['status']['workCoord'][axis] = value - offset[axis]
+            point['cornerSource'] = 'restored'
+            completed[name] = point
+        restored = [dict(name=n, source='restored', **position(completed[n])[0]) for n in CORNERS if n in completed]
+        area = None
+        try: area = positioning_rectangle(completed)
+        except ValueError: pass
+        self.checkpoint_surface()
+        with self.lock:
+            if self.stopped or not self.data['armed']: raise ValueError('Setup stopped during restoration')
+            self.snapshots = completed
+            self.data.update(corners=restored, area=area, geometryIssue=corner_issue(restored),
+                             measurements=[], result=None, handoff=None, mapSource=None)
+            self.invalidate_plan()
+        with self.pcb_lock: self.pcb.invalidate('Saved XY boundaries reused. Recheck job alignment and measure a new surface.')
+        self.log('Saved XY boundaries reused at the current raised Z. Old contacts remain historical; no movement was sent.')
 
     def pcb_state(self, include_paths=True):
         with self.pcb_lock:
@@ -334,7 +403,7 @@ class Controller:
             add('Connection', True, 'Demo · no machine access' if self.demo else f"UGS PID {s['listener']['pid']}")
             idle = status['state'] == 'IDLE' and status['feedSpeed'] == 0 and status['spindleSpeed'] == 0
             add('Controller', idle, f"{status['state']} · feed {status['feedSpeed']} · spindle {status['spindleSpeed']}")
-            add('Selected job', not bool(s['file'].get('fileName') or s['file'].get('remainingRowCount')), s['file'].get('fileName') or 'No file selected')
+            add('Selected job', not bool(s['file'].get('fileName') or s['file'].get('remainingRowCount')), (str(s['file'].get('fileName') or 'Active job') + ' · close all cutting-file documents before mapping; keep the UGS connection and reference') if (s['file'].get('fileName') or s['file'].get('remainingRowCount')) else 'No file selected')
             if not self.demo:
                 from ugs_api import read
                 settings = s['settings']
@@ -352,6 +421,25 @@ class Controller:
             else:
                 native = True
             add('Smooth Hold', native, 'Native jog available' if native else 'Extension not loaded; single steps only')
+            if self.demo:
+                add('Native map import', None, 'Demo only; native import is not checked against UGS')
+            else:
+                try:
+                    from ugs_surface_bridge import SurfaceBridge
+                    from ugs_api import verify_listener
+                    capabilities = SurfaceBridge(f"http://127.0.0.1:{self.profile['ugsPort']}/api/v1",
+                                                 guard=verify_listener).capabilities()
+                    available = capabilities.get('available') is True
+                    awaiting_window = (capabilities.get('protocol') == 1
+                                       and capabilities.get('importSupported') is True
+                                       and capabilities.get('missingDependency') == 'open_native_AutoLeveler_required')
+                    add('Native map import', True if available or awaiting_window else None,
+                        'UGS map-import extension available; each actual import still needs native readback'
+                        if available else 'UGS map-import extension loaded. Keep AutoLeveler closed during probing; open it after the accepted scan to import the map.'
+                        if awaiting_window else 'UGS map-import extension is unavailable. Save the XYZ map and import it manually in AutoLeveler. Exactly flat maps need the updated extension; do not invent height variation.')
+                except Exception as error:
+                    add('Native map import', None, 'Native import could not be checked: ' + str(error) + '. Mapping does not establish that import or compensation works.')
+
             add('Surface reference', None, 'A connection check does not establish material Z zero. Fresh probing is still required.')
         except Exception as e:
             add('Connection', False, str(e))
@@ -439,6 +527,7 @@ class Controller:
             first = not self.stopped
             self.stopped = True
             self.data.update(armed=False, prompt=None, phase='stopped')
+            if self.demo: self.data['busy'] = False
             if first:
                 self.data.update(error=reason, fault=fault_details(reason))
             child = self.child
@@ -450,6 +539,7 @@ class Controller:
             with self.pcb_lock:
                 self.pcb.invalidate('Machine session stopped. Teach fresh references before exporting.')
             self.log(reason + '. Use the physical stop if motion persists. Start a fresh setup after inspection; no automatic retry.')
+            self.checkpoint_surface()
 
     def watchdog(self):
         while not self.closed:
@@ -505,6 +595,7 @@ class Controller:
             self.log('Closed-tab session recovered. Preparation records kept; old physical references cleared.')
             return {'sessionId':self.data['sessionId'], 'referencesRestored':False}
         finally:
+            self.checkpoint_surface()
             self.action_lock.release()
 
     def launch(self, command, stdin=None, scan=False):
@@ -537,7 +628,8 @@ class Controller:
                     if kind == 'message': self.log(event.get('text',''))
                     elif kind == 'status': self.data['status']=event['status']
                     elif kind == 'point': self.data['currentPoint']=event
-                    elif kind == 'measurement': self.data['measurements'].append(event['record'])
+                    elif kind == 'measurement':
+                        self.data['measurements'].append(event['record']); self.checkpoint_surface()
                     elif kind == 'result':
                         if scan_result is not None:
                             failure_reason = 'Duplicate scan result from worker'
@@ -655,7 +747,12 @@ class Controller:
                 finally:
                     if self.job_setup_signature() != before:
                         self.invalidate_job_surface()
+            if action == 'history-read':
+                return self.history.get(body.get('id'))
+            if action == 'history-restore':
+                return self.restore_surface(body)
             if action == 'new-session':
+                self.checkpoint_surface()
                 if (self.data['phase'] == 'complete' and not self.data['busy']
                     and not (self.child and self.child.poll() is None)):
                     # The explicit new-map action can retire a read-only observer.
@@ -781,10 +878,13 @@ class Controller:
                 return
             if not self.data['armed']:
                 raise ValueError('Review and enable teaching first')
-            if action in ('jog','jog-hold'):
+            if action in ('jog','jog-hold','clearance-jog'):
                 if self.data['phase'] != 'teach':
                     raise ValueError('Jogging locked during a scan')
                 axis, delta = body.get('axis'), body.get('delta')
+                clearance = action == 'clearance-jog'
+                if clearance and (axis != 'z' or body.get('confirmed') is not True):
+                    raise ValueError('Confirm the Z path is clear before adjusting clearance')
                 held=action == 'jog-hold'
                 if held and not self.data['nativeJog']:
                     raise ValueError('Smooth hold requires the prepared UGS extension and an UGS restart')
@@ -794,13 +894,14 @@ class Controller:
                 speed=body.get('speed','normal')
                 if speed not in self.speeds: raise ValueError('Invalid speed selection')
                 feed=self.speeds[speed][axis]
+                if clearance: feed = min(feed, self.profile['feeds']['z'])
                 hold_id=body.get('id') if held else None
                 if held:
                     if not isinstance(hold_id,str) or not 8<=len(hold_id)<=80 or not all(c.isalnum() or c in '_-' for c in hold_id):
                         raise ValueError('Invalid hold ID')
                 if self.snapshots:
-                    if axis == 'z':
-                        raise ValueError('Keep the taught raised Z; clear corners before changing height')
+                    if axis == 'z' and not clearance:
+                        raise ValueError('Use the grid clearance controls to change the taught raised Z')
                 s=self.checked()
                 if held:
                     with self.lock:
@@ -827,7 +928,15 @@ class Controller:
                         valid_distance=(-.005<=travelled<=limit+.005) if held else abs(travelled-abs(delta))<=.005
                         if offset!=previous_offset or end['listener']!=s['listener'] or not valid_distance or any(abs(m[a]-start[a])>.005 for a in 'xyz' if a!=axis):
                             raise ValueError('Jog end position or reference mismatch')
-                        self.expected=end;self.data['status']=end['status']
+                        with self.lock:
+                            if self.stopped: raise ValueError('Session stopped')
+                            self.expected=end;self.data['status']=end['status']
+                            if clearance:
+                                for point in self.snapshots.values():
+                                    point['status']['machineCoord']['z'] = m['z']
+                                    point['status']['workCoord']['z'] = end['status']['workCoord']['z']
+                                self.data['corners'] = [dict(p, z=m['z']) for p in self.data['corners']]
+                        if clearance: self.checkpoint_surface()
                     except Exception as e:
                         self.stop(str(e))
                     finally:
@@ -953,12 +1062,17 @@ class Controller:
                 source=self.data.get('mapSource')
                 if source and not map_source_current(self.pcb, self.data['sessionId'], self.data):
                     raise ValueError('Job changed after choosing the scan area. Use Map this job again.')
-                config = make_config(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'])
+                config = make_config(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'],body.get('edgeInset',0))
+                if source:
+                    with self.pcb_lock:
+                        required = scan_area(self.pcb, 0)['area']
+                    if any(config['grid'][a][0] > required[a][0] or config['grid'][a][-1] < required[a][1] for a in 'xy'):
+                        raise ValueError('Inset excludes part of the cutting job. Expand the taught area or reduce the inset.')
                 if self.demo:
                     self.data['plan'] = config
                     self.data['route'] = scan_route(config)
                 else:
-                    path = save_plan(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'])
+                    path = save_plan(self.snapshots, body.get('spacing'),current,self.profile,self.data['probeMode'],body.get('edgeInset',0))
                     output = subprocess.check_output(['node', str(ROOT/'scripts/ugs_puck_map.mjs'), '--config', str(path)], cwd=ROOT, text=True, timeout=10)
                     planned = json.loads(output)
                     self.data.update(plan=planned['config'], route=planned['route']); self.plan_path = path
@@ -991,19 +1105,25 @@ class Controller:
             else:
                 raise ValueError('Unknown action')
         finally:
+            self.checkpoint_surface()
             self.action_lock.release()
 
     def demo_copper(self):
         self.require_machine_mode()
+        session = self.data['sessionId']
         total = len(self.data['route']['points'])
         # One explicit route approval; Stop/heartbeat remains active for every point.
         while not self.stopped and self.demo_index <= total:
             time.sleep(.12)
-            if self.stopped: return
+            if self.stopped or self.data['sessionId'] != session: return
             self.demo_next()
             if self.demo_index <= total: self.data['prompt'] = None
 
     def demo_next(self):
+        try: return self._demo_next()
+        finally: self.checkpoint_surface()
+
+    def _demo_next(self):
         self.require_machine_mode()
         plan = self.data['plan']; total=len(plan['grid']['x'])*len(plan['grid']['y'])+1
         if 1 <= self.demo_index <= total:

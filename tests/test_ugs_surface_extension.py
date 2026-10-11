@@ -15,7 +15,7 @@ from ugs_surface_bridge import check_surface_stock, make_payload
 class SurfaceExtensionTests(unittest.TestCase):
     def test_native_scanner_and_endpoint_regressions(self):
         compiler, runtime = jdk_tools()
-        from ugs_loopback_setup import APP, STATE, check_stock
+        from ugs_loopback_setup import APP, check_stock
         modules = APP / 'Contents/Resources/ugsplatform/ugsplatform/modules'
         if not modules.is_dir():
             self.skipTest('Compatible local UGS 2.1.26 jars required')
@@ -30,11 +30,44 @@ class SurfaceExtensionTests(unittest.TestCase):
             fixture.write_text(JAVA_FIXTURE.replace('PAYLOAD_LITERAL', json.dumps(json.dumps(payload))))
             commands = [
                 [str(compiler), '--release', '17', '-cp', cp, '-d', directory,
-                 *map(str, (STATE / 'src').rglob('*.java')), str(fixture)],
-                [str(runtime), '-Djava.awt.headless=true', '-ea', '-cp', directory + os.pathsep + cp,
+                 *map(str, (ROOT / 'extensions/ugs/src').rglob('*.java')), str(fixture)],
+                [str(runtime), '-Duser.home=' + directory, '-Djava.awt.headless=true', '-ea', '-cp', directory + os.pathsep + cp,
                  'com.willwinder.universalgcodesender.pendantui.v1.resources.SurfaceMapTest'],
             ]
             for command in commands:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('SurfaceMapTest passed', result.stdout)
+            print(result.stdout.strip())
+
+    def test_open_native_panel_settings_feedback(self):
+        compiler, runtime = jdk_tools()
+        from ugs_loopback_setup import APP, check_stock
+        platform = APP / 'Contents/Resources/ugsplatform'
+        if not platform.is_dir():
+            self.skipTest('Compatible local UGS 2.1.26 jars required')
+        check_stock()
+        check_surface_stock(APP)
+        cp = os.pathsep.join(str(j) for j in sorted(platform.rglob('*.jar')))
+        payload = make_payload('panel-map-01', [17.682, 44.381, 71.080, 71.181],
+                               [-14.019, 12.680, 39.379, 59.979],
+                               [[0, .01, .02, .03], [.01, .02, .03, .04],
+                                [.02, .03, .04, .05], [.03, .04, .05, .06]])
+        import json
+        source = JAVA_FIXTURE.replace('PAYLOAD_LITERAL', json.dumps(json.dumps(payload)))
+        start = source.index('        // The hash must')
+        end = source.index('        System.out.println("SurfaceMapTest passed:')
+        source = source[:start] + PANEL_CASES + source[end:]
+        with tempfile.TemporaryDirectory(prefix='ugs-panel-test-') as directory:
+            fixture = Path(directory) / 'SurfaceMapTest.java'
+            fixture.write_text(source)
+            for command in [
+                [str(compiler), '--release', '17', '-cp', cp, '-d', directory,
+                 *map(str, (ROOT / 'extensions/ugs/src').rglob('*.java')), str(fixture)],
+                [str(runtime), '-Duser.home=' + directory, '-Djava.awt.headless=true', '-ea',
+                 '-cp', directory + os.pathsep + cp,
+                 'com.willwinder.universalgcodesender.pendantui.v1.resources.SurfaceMapTest'],
+            ]:
                 result = subprocess.run(command, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('SurfaceMapTest passed', result.stdout)
@@ -79,6 +112,9 @@ public class SurfaceMapTest {
             backend = (BackendAPI)Proxy.newProxyInstance(getClass().getClassLoader(), new Class[]{BackendAPI.class}, (p,m,a)-> {
                 switch(m.getName()) {
                     case "getSettings": return settings;
+                    case "addUGSEventListener": return null;
+                    case "hashCode": return System.identityHashCode(p);
+                    case "equals": return p == a[0];
                     case "isConnected": return connected;
                     case "isIdle": return idle;
                     case "isSendingFile": return sending;
@@ -192,7 +228,7 @@ public class SurfaceMapTest {
         }
         ok(nativeAccess[0] == 0);
         // Flat maps, short final grid intervals and signed coordinates are valid.
-        for (double[][] axes : List.of(new double[][]{{-10,0,10},{0,10,20}},new double[][]{{0,10,15},{0,10,17}},new double[][]{{.1,.2,.3,.4},{-.1,0,.1,.2}},new double[][]{{-5.123,4.877,14.877},{0,10,20}})) {
+        for (double[][] axes : List.of(new double[][]{{-10,0,10},{0,10,20}},new double[][]{{0,10,15},{0,10,17}},new double[][]{{.1,.2,.3,.4},{-.1,0,.1,.2}},new double[][]{{-5.123,4.877,14.877},{0,10,20}},new double[][]{{17.682,44.381,71.080,71.181},{-14.019,12.680,39.379,59.979}})) {
             double[][] z = new double[axes[1].length][axes[0].length];
             var flat = new SurfaceMapResource.Grid("flat-map-01",axes[0],axes[1],z);
             Fake a = new Fake(); a.access.safe(); a.access.load(flat); ok(flat.matches(a.nativeState())); tests++;
@@ -200,6 +236,60 @@ public class SurfaceMapTest {
         System.out.println("SurfaceMapTest passed: " + tests + " native scanner/transaction cases, no machine calls");
     }
 }
+'''
+
+PANEL_CASES = r'''
+        var lookup = com.willwinder.universalgcodesender.services.LookupService.class.getDeclaredField("isInitialized");
+        lookup.setAccessible(true); lookup.setBoolean(null, true);
+        for (boolean fail : new boolean[]{false, true}) {
+        Fake a = new Fake();
+        com.willwinder.universalgcodesender.services.LookupService.register(a.backend);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            var global = a.settings.getAutoLevelSettings();
+            var oldGrid = a.scanner.getProbePositionGrid();
+            var preview = new com.willwinder.ugs.platform.surfacescanner.renderable.AutoLevelPreview("fixture");
+            var panel = new com.willwinder.ugs.platform.surfacescanner.ui.AutoLevelerPanel(
+                a.scanner, a.manager, preview, global, Units.MM);
+            // Same synchronous feedback path as AutoLevelerTopComponent.
+            panel.addAutoLevelerPanelListener(() -> {
+                global.apply(panel.getSettings());
+                a.scanner.update(panel.getMinPosition(), panel.getMaxPosition());
+                a.scanner.reset();
+            });
+            global.addSettingChangeListener(() -> panel.setSettings(global));
+            int[] faults = {0};
+            a.scanner.addListener(() -> {
+                preview.updateSettings(a.scanner.getProbeStartPositions(), a.scanner.getProbePositionGrid());
+                boolean measured = false;
+                for (var column : a.scanner.getProbePositionGrid())
+                    for (var point : column) measured |= Double.isFinite(point.getZ());
+                if (fail && measured && faults[0]++ == 0) throw new IllegalStateException("injected point failure");
+            });
+            if (fail) {
+                var refused = body(a.resource.importMap(PAYLOAD), 409);
+                ok(Boolean.FALSE.equals(refused.get("rollbackFailed")));
+                ok(a.scanner.getProbePositionGrid() == oldGrid);
+                ok(global.getStepResolution() == 1 && panel.getSettings().getStepResolution() == 1);
+                ok(panel.getMinPosition().getX() == 0 && panel.getMaxPosition().getX() == 1);
+                ok(!global.getApplyToGcode());
+                try { ok(SurfaceMapResource.field(preview, "grid") == oldGrid); }
+                catch (Exception e) { throw new RuntimeException(e); }
+                tests++;
+                return;
+            }
+            var imported = body(a.resource.importMap(PAYLOAD), 200);
+            ok(Boolean.TRUE.equals(imported.get("verified")));
+            body(a.resource.verify(PAYLOAD), 200);
+            ok(a.scanner.getProbePositionGrid().length == 4);
+            ok(a.scanner.getProbePositionGrid()[0].length == 4);
+            ok(!global.getApplyToGcode());
+            ok(panel.getMinPosition().getX() == 17.682);
+            ok(panel.getMaxPosition().getY() == 59.979);
+            ok(global.getZSurface() == 0);
+            ok(global.getAutoLevelProbeOffset().getZ() == 0);
+            tests++;
+        });
+        }
 '''
 
 

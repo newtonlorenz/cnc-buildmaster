@@ -9,9 +9,10 @@ import subprocess
 from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = ROOT / 'extensions/ugs'
 from surface_config import load_config
-APP = Path(load_config(demo=True)['ugsApp'])
+CONFIG = load_config(demo=True)
+STATE = Path(CONFIG.get('ugsExtensionDir', ROOT / 'extensions/ugs'))
+APP = Path(CONFIG['ugsApp'])
 JAR = APP / 'Contents/Resources/ugsplatform/ugsplatform/modules/ext/com.willwinder.ugs-platform-ugslib/com-willwinder-universalgcodesender/ugs-pendant.jar'
 CLASS = 'com/willwinder/universalgcodesender/pendantui/PendantUI.class'
 PATCH = STATE / 'loopback-patch.jar'

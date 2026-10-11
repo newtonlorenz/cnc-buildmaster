@@ -82,10 +82,10 @@ npm run test:browser
 **Verification record — 20 September 2026:** implemented workflow and source
 review, with isolated simulation and offline storage.
 
-- 217 Python tests and 113 JavaScript tests passed.
+- 224 Python tests and 113 JavaScript tests passed.
 - The pinned Java harnesses passed 20 held-jog cases and 41 native surface-map
   transaction cases, using fake controllers and no machine commands.
-- All seven browser suites passed: machine/surface controls, files/alignment,
+- All eight browser suites passed: machine/surface controls, files/alignment,
   desktop interaction, efficient mapping/results, Job guide/copper simulation,
   offline preparation/closed-tab recovery, and agent access/operator review.
 - TypeScript checking and the production UI build passed. Generated assets were

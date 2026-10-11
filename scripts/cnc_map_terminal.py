@@ -91,10 +91,17 @@ def grid_axis(lo, hi, spacing):
     return values
 
 
-def make_config(snapshots, spacing, current=None, profile=None, probe_mode="puck"):
+def make_config(snapshots, spacing, current=None, profile=None, probe_mode="puck", edge_inset=0):
     profile = profile or load_config(demo=True)
     if probe_mode not in ('puck', 'copper'): raise ValueError('Choose puck or copper probing')
     bounds = taught_rectangle(snapshots)
+    if type(edge_inset) not in (int, float): raise ValueError('Enter a numeric edge inset')
+    edge_inset = finite(edge_inset)
+    if edge_inset < 0 or abs(edge_inset*1000-round(edge_inset*1000)) > 1e-6:
+        raise ValueError('Edge inset must be non-negative with at most three decimals')
+    bounds = {a: [round(bounds[a][0]+edge_inset, 3), round(bounds[a][1]-edge_inset, 3)] for a in 'xy'}
+    if any(v[1]-v[0] < .1 for v in bounds.values()):
+        raise ValueError('Edge inset leaves no usable scan area')
     ordered = list(snapshots.values()) if isinstance(snapshots, dict) else snapshots
     current = current or ordered[-1]
     m, offset = position(current)
@@ -106,14 +113,14 @@ def make_config(snapshots, spacing, current=None, profile=None, probe_mode="puck
         raise ValueError('Move to a recorded corner or grid point before previewing the scan')
     if len(x)*len(y) > 2500:
         raise ValueError('Too many points')
-    return {'version': 1, 'grid': {'x': x, 'y': y, 'spacing': finite(spacing)},
+    return {'version': 1, 'edgeInset': edge_inset, 'grid': {'x': x, 'y': y, 'spacing': finite(spacing)},
             'start': m, 'travelZ': m['z'], 'expectedG54': offset,
             'envelope': {**bounds, 'z': [round(m['z']-5.2, 3), round(m['z']+1, 3)]},
             'probeMode': probe_mode, 'puckHeight': 0 if probe_mode == 'copper' else profile['puckHeight'], 'feeds': profile['feeds'], 'outputDir': profile['dataDir']}
 
 
-def save_plan(snapshots, spacing, current=None, profile=None, probe_mode="puck"):
-    config = make_config(snapshots, spacing, current, profile, probe_mode)
+def save_plan(snapshots, spacing, current=None, profile=None, probe_mode="puck", edge_inset=0):
+    config = make_config(snapshots, spacing, current, profile, probe_mode, edge_inset)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
     directory = Path(config['outputDir'])/('puck-map-plan-'+stamp)
     directory.mkdir(parents=True, exist_ok=False)

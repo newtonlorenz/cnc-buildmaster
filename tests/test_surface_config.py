@@ -43,7 +43,9 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_node_and_python_use_the_same_configuration(self):
         self.value.update(puckHeight=19.725, ugsPort=8123)
+        self.value['ugsExtensionDir'] = 'existing-override'
         expected = self.load()
+        self.assertEqual(expected['ugsExtensionDir'], str((self.path.parent/'existing-override').resolve()))
         with patch.dict(os.environ, {'CNC_BUILDMASTER_CONFIG':str(self.path)}):
             text = subprocess.check_output(['node','--input-type=module','-e', "import {getConfig,apiBase,socketUrl} from './scripts/surface_config.mjs'; console.log(JSON.stringify({c:getConfig(),apiBase,socketUrl}));"],cwd=ROOT,text=True)
         result=json.loads(text)

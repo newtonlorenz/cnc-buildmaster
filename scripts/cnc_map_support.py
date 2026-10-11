@@ -13,6 +13,9 @@ def fault_details(reason):
     elif 'did not send the reference query' in lower or 'did not acknowledge the reference query' in lower:
         title = 'UGS did not answer the reference check'
         next_step = 'The work offset has not been verified; this does not prove it changed. Check UGS connection and command console, then start a fresh setup. No command was retried.'
+    elif ('file' in lower and any(word in lower for word in ('selected', 'loaded', 'no file', 'no selected'))):
+        title = 'A cutting file is selected in UGS'
+        next_step = 'Close all cutting-file documents in UGS before mapping, keeping the current connection and work reference. Then start a fresh setup. Load the cutting file again after measurement and handoff.'
     elif 'command deadline' in lower:
         title = 'UGS did not confirm the command'
         next_step = 'The command response or stopped-position check timed out. Inspect the machine, then start a fresh setup. The command was not retried.'

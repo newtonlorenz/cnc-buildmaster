@@ -59,7 +59,7 @@ REQUEST = {
     'capture': obj({'corner': CORNER}, ('corner',)),
     'corner-entry': obj({'corner': CORNER, 'x': NUMBER, 'y': NUMBER}, ('corner', 'x', 'y')),
     'complete-rectangle': obj({'area': obj({'x': XY, 'y': XY}, ('x', 'y'))}, ('area',)),
-    'reset-corners': obj(), 'plan': obj({'spacing': NUMBER}, ('spacing',)),
+    'reset-corners': obj(), 'plan': obj({'spacing': NUMBER, 'edgeInset': {'type':'number','minimum':0}}, ('spacing',)),
     'scan': obj({'planId': STRING}, ('planId',)),
     'new-session': obj(), 'surface-import': obj(), 'handoff-finish': obj(),
     'pcb-capture': obj({'label': {'enum': ['A', 'B', 'C']}, 'design': XY}, ('label', 'design')),

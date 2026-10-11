@@ -1,8 +1,8 @@
 # Surface handoff protocol 1 (UGS 2.1.26 only)
 
-This is source implementation, not an installed/live-verified extension. No CNC
-command, connection, coordinate change, file selection, or compensation apply is
-part of this API.
+Build and install this extension for the pinned UGS version before using the API.
+No CNC command, connection, coordinate change, file selection, or compensation
+apply is part of this API. Installation and physical qualification are separate.
 
 Endpoints below are relative to `/api/v1/surfaceMap`:
 
@@ -102,8 +102,17 @@ Inspected upstream revision `ded15ddc4e5aaa1d20f87807aae7fcfc73e71319`
 
 Offline tests must use the pinned installed classes. No live installation or
 hardware is needed. Rollback restores scanner and settings fields; a rollback
-failure latches the resource closed for further imports. A later UI preview
-refresh may be required after a failed import, but compensation stays disabled.
+failure latches the resource closed for further imports. Recovery restores the
+empty scanner before synchronising settings and refreshing scanner listeners,
+so the open panel and preview follow the restored state. If a listener prevents
+recovery, further imports are blocked. Compensation stays disabled.
+
+Import updates settings with sequential public setters. A bulk `apply` can trigger
+the open panel's synchronous feedback before all controls have synchronised and
+overwrite the incoming grid. The regression harness includes the real native
+panel and preview, with successful import and injected point-failure rollback.
+Scanner-listener callbacks are resolved through the scanner module's classloader;
+the patch does not introduce a reverse NetBeans module dependency.
 
 ## Offline verification
 

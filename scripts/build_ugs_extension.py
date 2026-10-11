@@ -8,12 +8,14 @@ import shutil
 import subprocess
 import tempfile
 from zipfile import ZipFile, ZIP_DEFLATED
-from ugs_loopback_setup import APP, STATE, PATCH, check_stock, check, sha
+from ugs_loopback_setup import ROOT, APP, STATE, PATCH, check_stock, check, sha
 
 def build(javac):
     check_stock()
     modules = APP/'Contents/Resources/ugsplatform/ugsplatform/modules'
-    sources = sorted((STATE/'src').rglob('*.java'))
+    # An external installed override can contain an older source snapshot, or
+    # only built artefacts. Always compile the maintained checkout sources.
+    sources = sorted((ROOT/'extensions/ugs/src').rglob('*.java'))
     with tempfile.TemporaryDirectory(prefix='buildmaster-ugs-') as temporary:
         directory = Path(temporary)
         classpath = os.pathsep.join(str(p) for p in modules.rglob('*.jar'))

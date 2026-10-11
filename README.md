@@ -9,6 +9,9 @@ CNC Buildmaster gives you a visual workspace for the steps before a CNC cut.
 You can inspect cutting files, position them on your material, and measure changes in surface height.
 The app opens in your browser and runs on your own computer.
 
+On macOS, the optional [desktop launcher](docs/DESKTOP.md) lets you open the app
+from Spotlight or your desktop, with server controls and shortcuts to logs.
+
 It is an early open-source project for desktop CNC users, with a focus on printed circuit boards (PCBs).
 You can explore the demo without a machine.
 
@@ -41,6 +44,7 @@ Saved files do not restore a valid physical machine reference.
 | **Camera** | Open a local live view. The camera does not measure position or control movement. |
 | **Connection** | Check UGS and inspect your configured machine, puck height and permitted speeds. |
 | **Session log** | Inspect recent events and saved-file details. |
+| **Previous teaching & scans** | View saved boundaries and contacts. Reuse checked XY boundaries with a fresh setup; saved history does not restore machine references or approval. |
 
 The interface uses one React application with shadcn/ui components throughout: navigation, forms, controls, inspectors and dialogs. All assets are served locally.
 
@@ -75,6 +79,23 @@ It does not replace your design software or generate cutting paths from a circui
 It does not send cutting jobs or apply height correction to exported cutting files. Copper scanning requires a checked circuit and explicit approval of the complete route.
 
 An exported cutting file is a **draft for inspection in UGS**, not an approved machining job.
+
+## Transfer a measured surface to UGS
+
+With the compatible extension installed, Buildmaster can import an accepted map
+into UGS AutoLeveler and check every returned coordinate and height.
+
+1. Keep all cutting-file documents and native AutoLeveler closed during puck mapping.
+2. Complete the measurements, return check and physical-observation review.
+3. Open an empty UGS AutoLeveler and turn **Apply to G-code** off.
+4. Select **Import accepted map into UGS** in Buildmaster. Require verified readback.
+5. Select **Finish preparation in UGS** before changing the work reference or loading a cutting file.
+6. Verify material-top Z and full cutting-path coverage. Enable compensation in UGS
+   once, then inspect the actual processed cutting file before starting.
+
+Import does not set material Z, apply compensation or start cutting. Keep the
+same connection, tool and workholding throughout. See the
+[operation guide](docs/OPERATION.md) and [UGS setup](docs/UGS.md).
 
 ## Try it without a machine
 
@@ -219,6 +240,7 @@ This is an early project. Automated tests do not qualify a physical machine or c
 ## Documentation
 
 - [Configuration](docs/CONFIGURATION.md) — machine details, speeds and storage.
+- [macOS launcher](docs/DESKTOP.md) — open the app from Spotlight or the desktop.
 - [UGS extension](docs/UGS.md) — connection setup and compatibility checks.
 - [Operation](docs/OPERATION.md) — job preparation, movement and surface measurement.
 - [Product review](docs/PRODUCT_REVIEW.md) — intended journeys, implemented fixes and release gates.

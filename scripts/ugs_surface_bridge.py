@@ -157,7 +157,13 @@ class SurfaceBridge:
                 error.close()
             if not isinstance(detail, dict):
                 raise SurfaceBridgeError('Invalid native error response')
-            raise SurfaceBridgeError('Native surface request refused: ' + str(detail.get('code', error.code))) from error
+            message = 'Native surface request refused: ' + str(detail.get('code', error.code))
+            reason = detail.get('reason')
+            if isinstance(reason, str) and reason.strip():
+                message += ' (' + ' '.join(reason.split())[:1000] + ')'
+            if detail.get('rollbackFailed') is True:
+                message += '; native rollback failed — inspect UGS before further import'
+            raise SurfaceBridgeError(message) from error
         except (URLError, TimeoutError, OSError) as error:
             # An import may have completed; the caller must verify, never retry automatically.
             raise SurfaceBridgeError('UGS surface response unavailable; import outcome unknown; verify native state') from error

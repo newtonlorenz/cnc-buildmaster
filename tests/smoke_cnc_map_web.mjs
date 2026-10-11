@@ -193,9 +193,8 @@ try{
  await page.locator('#finished').waitFor({state:'visible'});
  if(await page.locator('#scanProgress').getAttribute('aria-valuenow')!=='100'||await page.locator('#scanProgress').getAttribute('aria-valuetext')!=='10 of 10 measurements')throw Error('Full progress not recorded');
  await openUtility(page,'Connection');
- const downloaded=page.waitForEvent('download');
- await page.locator('#report').click();
- const report=JSON.parse(await readFile(await (await downloaded).path(),'utf8'));
+ const [downloaded]=await Promise.all([page.waitForEvent('download'),page.locator('#report').click()]);
+ const report=JSON.parse(await readFile(await downloaded.path(),'utf8'));
  if(report.measurements.length!==10||!report.measurements.every(m=>m.simulated))throw Error('Demo report is not explicit about simulated readings');
  if(JSON.stringify(report).includes(url.split('#')[1]))throw Error('Session report leaked authentication token');
  await closeUtility(page);

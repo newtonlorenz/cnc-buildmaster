@@ -10,7 +10,7 @@
   "scripts": {
     "test": "python3 -m unittest discover -s tests -p \"test_*.py\" && node --test tests/test_ugs_*.mjs tests/test_mapping_plan.mjs tests/test_workbench_client.mjs tests/test_job_readiness.mjs tests/test_surface_results.mjs tests/test_agent_bridge.mjs tests/test_agent_integration.mjs",
     "test:agent": "node --test tests/test_agent_bridge.mjs tests/test_agent_integration.mjs",
-    "test:browser": "node tests/smoke_cnc_map_web.mjs && node tests/smoke_pcb_workbench.mjs && node tests/smoke_workbench_desktop.mjs && node tests/smoke_mapping_efficiency.mjs && node tests/smoke_job_guide.mjs && node tests/smoke_offline_preparation.mjs && node tests/smoke_agent_access.mjs",
+    "test:browser": "node tests/smoke_cnc_map_web.mjs && node tests/smoke_pcb_workbench.mjs && node tests/smoke_workbench_desktop.mjs && node tests/smoke_mapping_efficiency.mjs && node tests/smoke_job_guide.mjs && node tests/smoke_offline_preparation.mjs && node tests/smoke_agent_access.mjs && node tests/smoke_surface_recovery.mjs",
     "build:ui": "npm run --prefix scripts/cnc-map-ui build"
   },
   "dependencies": {

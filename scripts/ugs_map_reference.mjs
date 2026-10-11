@@ -12,11 +12,14 @@ const near=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=.0051;
 export async function settleReference({WebSocketClass,request,snapshot,pause=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now,log=()=>{}}){
   const initial=await snapshot();let ws,failure=null,commandId=null,offsets=null,lastStatus=null;
   const checked=s=>{
-    ensure(s.state==='IDLE'&&s.spindleSpeed===0&&s.feedSpeed===0&&!s.fileName&&!s.remainingRowCount,'Wait for UGS to be connected and stopped');
+    ensure(s.state==='IDLE'&&s.spindleSpeed===0&&s.feedSpeed===0,'Wait for UGS to be connected and stopped');
+    ensure(!s.fileName&&!s.remainingRowCount,'A cutting file is selected in UGS. Close all cutting-file documents before surface mapping; keep the current connection and work reference.');
     ensure(s.machineCoord.units==='MM'&&s.workCoord.units==='MM','Expected MM');
     for(const a of ['x','y','z'])ensure(near(s.machineCoord[a],initial.status.machineCoord[a]),'Machine moved during reference startup');
   };
   checked(initial.status);
+  ensure(!initial.file?.fileName&&!initial.file?.remainingRowCount,
+    'A cutting file is selected in UGS. Close all cutting-file documents before surface mapping; keep the current connection and work reference.');
   try{
     ws=new WebSocketClass(socketUrl);
     ws.on('message',raw=>{try{
@@ -49,6 +52,8 @@ export async function settleReference({WebSocketClass,request,snapshot,pause=ms=
         matching=matches?matching+1:0;
         if(matching>=2){
           const final=await snapshot();checked(final.status);
+          ensure(!final.file?.fileName&&!final.file?.remainingRowCount,
+            'A cutting file is selected in UGS. Close all cutting-file documents before surface mapping; keep the current connection and work reference.');
           ensure(JSON.stringify(final.listener)===JSON.stringify(initial.listener),'UGS process changed');
           ensure(['port','portRate','firmwareVersion','preferredUnits'].every(k=>final.settings[k]===initial.settings[k]),'UGS profile changed');
           ensure(['x','y','z'].every((a,i)=>near(final.status.machineCoord[a]-final.status.workCoord[a],offsets.G54[i])),'Reference cache changed');

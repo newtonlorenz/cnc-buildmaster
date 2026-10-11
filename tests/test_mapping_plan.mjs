@@ -34,3 +34,15 @@ test('spacing presets disclose increasing work without implying accuracy',()=>{
     assert.ok(choices[0].draft.placements<=choices[2].draft.placements);
   }
 });
+test('fractional taught width does not add an almost coincident preset column',()=>{
+  const area={x:[-36.898,16.601],y:[-37.999,35.999]};
+  const wide=gridChoices(area)[0];
+  assert.equal(wide.spacing,26.75);
+  assert.equal(wide.draft.placements,13);
+  assert.deepEqual(wide.draft.grid.x,[-36.898,-10.148,16.601]);
+  assert.deepEqual(wide.draft,previewGrid(area,wide.spacing));
+  for(const option of gridChoices(area)){
+    const xs=option.draft.grid.x;
+    assert.ok(xs.at(-1)-xs.at(-2)>option.spacing*.99);
+  }
+});

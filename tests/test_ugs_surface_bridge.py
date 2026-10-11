@@ -94,6 +94,18 @@ class SurfaceBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.capabilities()['code'], 'extension_missing')
         self.assertEqual(self.guard_calls, 1)
 
+    def test_native_refusal_preserves_specific_reason_without_retry(self):
+        for reason, rollback in [('native_grid_coordinate_mismatch', False),
+                                 ('native_scan_z_range_required', True), (None, False)]:
+            body = json.dumps(dict(code='native_handoff_refused', reason=reason, rollbackFailed=rollback)).encode()
+            bridge = self.bridge(HTTPError('url', 409, 'conflict', {}, io.BytesIO(body)))
+            with self.assertRaises(SurfaceBridgeError) as caught:
+                bridge.import_map(payload())
+            self.assertIn('native_handoff_refused', str(caught.exception))
+            if reason: self.assertIn(reason, str(caught.exception))
+            if rollback: self.assertIn('rollback failed', str(caught.exception))
+            self.assertEqual(len(bridge.opener.requests), 1)
+
     def test_import_requires_two_fresh_guarded_readbacks(self):
         p = payload(); bridge = self.bridge(readback(p), readback(p))
         self.assertTrue(bridge.import_map(p)['verified'])

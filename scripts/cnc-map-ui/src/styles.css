@@ -887,10 +887,14 @@ label.field {
 }
 .utility-scroll {
   min-height: 0;
+  height: 65dvh;
   max-height: 65dvh;
-  flex: 1;
+  flex: 0 1 65dvh;
 }
 .utility-scroll [data-slot="scroll-area-viewport"] {
+  position: absolute;
+  inset: 0;
+  height: auto;
   padding-right: 12px;
 }
 .utility-footer {

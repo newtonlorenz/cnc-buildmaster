@@ -146,3 +146,28 @@ tab to have expired and all machine workers to have stopped. It keeps preparatio
 records, revokes the old tab and starts with no physical references. It does not
 resume movement or probing. An expired server token instead requires the new
 address printed by `./cnc-map status`.
+
+## Recover teaching and adjust scan clearance
+
+Open **Previous teaching & scans** to view recorded boundaries and partial or
+completed contacts on the working area. Real sessions are saved automatically in
+`dataDir/surface-history`; simulation history is memory-only. The history remains
+after a failed session and server restart. A storage failure is shown in the UI.
+
+After a failure, inspect the machine and enable a fresh teaching setup. Reuse saved
+XY boundaries only after checking unchanged stock, workholding and the machine XY
+reference. A matching work offset alone cannot prove that the machine did not lose
+position. Reuse takes the current raised Z and does not restore scan approval,
+measurements, a work zero, PCB alignment or cutting readiness.
+
+On **Plan grid**, set **Inset from taught boundary** when the corners describe
+the physical board edges. Allow at least the puck radius plus support clearance;
+use zero when the taught rectangle is already inset. The grid includes interior
+points and the perimeter of this smaller rectangle. It must still cover the full
+cutting job. Move to the displayed inset grid point, then preview the route.
+
+The grid page has **Raise Z** and **Lower Z** in 0.1 or 1 mm steps. Confirm a clear
+Z path and watch the cutter. Put the puck aside when lowering. The app preserves
+XY boundaries, updates the taught travel height only after verified movement, and
+invalidates the old route. Preview again before scanning. During an active scan,
+manual Z remains locked; stop and establish a fresh setup before changing it.

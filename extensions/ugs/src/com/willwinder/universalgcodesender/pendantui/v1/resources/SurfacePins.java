@@ -10,6 +10,7 @@ final class SurfacePins {
     static final Map<String,String> CLASSES = Map.ofEntries(
         Map.entry("com.willwinder.ugs.platform.surfacescanner.AutoLevelerTopComponent", "53f92bb31d6cc15cdd3ac79da5fe04209f5b0362cdb37de6a0186e430dfe8cd8"),
         Map.entry("com.willwinder.ugs.platform.surfacescanner.SurfaceScanner", "e1ac49aa788b45f4665bb61ba8ee26db54bff1883d5eb94a574455e273a52e89"),
+        Map.entry("com.willwinder.ugs.platform.surfacescanner.SurfaceScannerListener", "8f4c2dbb3155fc41856b188040161c1bf63e40baa336d495e26eb797fc986aa9"),
         Map.entry("com.willwinder.ugs.platform.surfacescanner.MeshLevelManager", "5a20a3526f2ee78456ef7753e370ac9a0d73eba248c21f50a9407ce54969c4e1"),
         Map.entry("com.willwinder.ugs.platform.surfacescanner.Utils", "dd05ed5784658225809055e97fdff99f4cc97e052d47a5f511af3411fe1d1f33"),
         Map.entry("com.willwinder.universalgcodesender.model.GUIBackend", "6d7aeb373391e8adeb933a999f5214853e4c91998598fac36b721f124fc39f1b"),

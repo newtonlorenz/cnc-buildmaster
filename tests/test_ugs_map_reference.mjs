@@ -46,3 +46,22 @@ test('completion without a matching sent query is rejected even if its ID is nul
  }}),/Reference query failed/);
  assert.equal(Socket.last.ended,true);
 });
+
+for(const source of ['status','file','remainingRows'])test(`selected job in ${source} blocks startup before any query`,async()=>{
+ const value=doctor(0);value.file={fileName:'',remainingRowCount:0};
+ if(source==='status')value.status.fileName='stencil.nc';
+ if(source==='file')value.file.fileName='stencil.nc';
+ if(source==='remainingRows')value.file.remainingRowCount=10;
+ let commands=0,sockets=0;
+ class NeverOpen {constructor(){sockets++;throw Error('Must not open a socket');}}
+ await assert.rejects(settleReference({WebSocketClass:NeverOpen,snapshot:async()=>value,request:async()=>{commands++;}}),/cutting file is selected.*keep the current connection/i);
+ assert.equal(commands,0);assert.equal(sockets,0);
+});
+
+test('a file selected between startup snapshots invalidates the reference handoff',async()=>{
+ let snapshots=0;
+ await assert.rejects(settleReference({WebSocketClass:Socket,snapshot:async()=>{
+  const value=doctor(snapshots++===0?0:-15.753);value.file={fileName:snapshots===1?'':'stencil.nc'};return value;
+ },request:async(route,body)=>{if(body){ack();return null;}return status(-15.753);}}),/cutting file is selected/i);
+ assert.equal(Socket.last.ended,true);
+});

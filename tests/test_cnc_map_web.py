@@ -284,6 +284,37 @@ class WebTests(unittest.TestCase):
         self.assertIsNone(self.c.data['plan'])
         with self.assertRaises(ValueError):self.c.perform('scan',{'planId':old})
 
+    def test_native_import_diagnostics_are_read_only_and_do_not_block_manual_fallback(self):
+        value = self.c.read_machine()
+        machine = self.c.profile['machine']
+        value['settings'] = dict(port=machine['connection']['port'], portRate=str(machine['connection']['baud']),
+                                 firmwareVersion='GRBL', preferredUnits='MM')
+        value['file']['fileName'] = 'stencil.nc'
+        self.c.demo = False
+        for capabilities in ({'protocol':1,'available':True}, {'protocol':1,'available':False},
+                             {'protocol':1,'available':False,'importSupported':True,
+                              'missingDependency':'open_native_AutoLeveler_required'}):
+            available = capabilities['available']
+            awaiting_window = capabilities.get('importSupported') is True
+            with self.subTest(capabilities=capabilities), patch.object(self.c, 'read_machine', return_value=value), \
+                 patch('ugs_api.read', return_value={'protocol':1,'nativeJog':True}), \
+                 patch('ugs_surface_bridge.SurfaceBridge') as bridge:
+                bridge.return_value.capabilities.return_value = capabilities
+                checks = self.c.diagnostics()['checks']
+                selected = next(x for x in checks if x['label']=='Selected job')
+                self.assertFalse(selected['ok'])
+                self.assertIn('keep the UGS connection', selected['detail'])
+                native = next(x for x in checks if x['label']=='Native map import')
+                self.assertIs(native['ok'], True if available or awaiting_window else None)
+                if awaiting_window:
+                    self.assertIn('Keep AutoLeveler closed during probing', native['detail'])
+                    self.assertIn('open it after', native['detail'])
+                elif not available:
+                    self.assertIn('import it manually', native['detail'])
+                    self.assertIn('Exactly flat', native['detail'])
+                bridge.return_value.import_map.assert_not_called()
+                self.assertFalse(self.c.data['armed'])
+
     def test_demo_diagnostics_and_measurements_are_offline_and_explicitly_simulated(self):
         with patch.object(web,'snapshot',side_effect=AssertionError('Hardware call')),patch.object(web,'save_plan',side_effect=AssertionError('Evidence write')):
             self.c.perform('diagnostics',{})
@@ -360,6 +391,12 @@ class WebTests(unittest.TestCase):
             xyz.write_text('altered')
             with self.assertRaisesRegex(ValueError,'checksum'):run()
             self.assertIsNone(self.c.data['result'])
+
+    def test_selected_file_failure_explains_recovery_without_reconnecting(self):
+        fault = web.fault_details('A cutting file is selected in UGS. Clear the selected file before surface mapping; keep the current connection and work reference.')
+        self.assertEqual(fault['title'], 'A cutting file is selected in UGS')
+        self.assertIn('keeping the current connection and work reference', fault['nextStep'])
+        self.assertIn('after measurement', fault['nextStep'])
 
     def test_missing_reference_ack_is_not_reported_as_changed_offset(self):
         self.assertEqual(web.fault_details('UGS did not acknowledge the reference query')['title'], 'UGS did not answer the reference check')

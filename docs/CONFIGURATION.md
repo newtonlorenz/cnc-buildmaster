@@ -39,6 +39,7 @@ It does not edit the file or change controller settings.
 | `configured` | `false` rejects machine mode. |
 | `ugsPort` | Local UGS port, from 1024 to 65535. The host is always `127.0.0.1`. |
 | `ugsApp` | Path to the supported macOS UGS application bundle. |
+| `ugsExtensionDir` | Optional existing installed override directory containing the patch JAR and hash manifests. Defaults to `extensions/ugs`. Selecting it does not install or restart UGS; all compatibility checks still apply. |
 | `dataDir` | Directory for jobs, plans and measurements. Relative paths use the configuration file directory. |
 | `machine.connection.port` | Exact serial device path, including `/dev/`. |
 | `machine.connection.baud` | Baud rate selected in UGS. |

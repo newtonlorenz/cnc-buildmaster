@@ -61,6 +61,9 @@ def load_config(demo=False, offline=False):
     for key in ('dataDir', 'ugsApp'):
         p = Path(c[key]).expanduser()
         c[key] = str((source.parent/p).resolve() if not p.is_absolute() else p.resolve())
+    if 'ugsExtensionDir' in c:
+        p = Path(c['ugsExtensionDir']).expanduser()
+        c['ugsExtensionDir'] = str((source.parent/p).resolve() if not p.is_absolute() else p.resolve())
     c['configPath'] = str(source)
     return c
 

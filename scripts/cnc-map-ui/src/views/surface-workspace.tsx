@@ -13,6 +13,7 @@ import {
   Move,
   ScanLine,
 } from "lucide-react";
+import { SurfaceHistory } from "@/components/surface-history";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -163,12 +164,13 @@ function Disclosure({
 /** Stay mounted across workspace navigation; a new server session clears all local drafts. */
 export function SurfaceWorkspace({ active }: { active: boolean }) {
   const { state } = useWorkbench();
+  const [historyPreview, setHistoryPreview] = useState<any>(null);
   return (
-    <SurfaceSession key={state?.sessionId ?? "connecting"} active={active} />
+    <SurfaceSession key={state?.sessionId ?? "connecting"} active={active} historyPreview={historyPreview} setHistoryPreview={setHistoryPreview} />
   );
 }
 
-function SurfaceSession({ active }: { active: boolean }) {
+function SurfaceSession({ active, historyPreview, setHistoryPreview }: { active: boolean; historyPreview: any; setHistoryPreview: (record: any) => void }) {
   const workbench = useWorkbench();
   const {
     state,
@@ -197,6 +199,9 @@ function SurfaceSession({ active }: { active: boolean }) {
   const [spacing, setSpacing] = useState(
     String(state?.plan?.grid?.spacing ?? 50),
   );
+  const [edgeInset, setEdgeInset] = useState(String(state?.plan?.edgeInset ?? 0));
+  const [clearanceConfirmed, setClearanceConfirmed] = useState(false);
+  const [clearanceStep, setClearanceStep] = useState("1");
   const [spacingEdited, setSpacingEdited] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   const [resultGeometryOpen, setResultGeometryOpen] = useState(false);
@@ -211,6 +216,7 @@ function SurfaceSession({ active }: { active: boolean }) {
   const geometryReady = corners.length === 4 && !!area && !state?.geometryIssue;
   const stage: MappingView = geometryReady ? mappingView : "teach";
   const baseLocked =
+    !!historyPreview ||
     !isActive ||
     !!state?.offline ||
     !online ||
@@ -228,11 +234,16 @@ function SurfaceSession({ active }: { active: boolean }) {
     pending ||
     !!state?.busy ||
     phase !== "setup";
-  const draft = previewGrid(area, Number(spacing), position);
-  const choices = gridChoices(area);
+  const inset = Number(edgeInset);
+  const scanArea: MappingArea | null = area && Number.isFinite(inset) && inset >= 0
+    ? { x: [area.x[0] + inset, area.x[1] - inset], y: [area.y[0] + inset, area.y[1] - inset] } : null;
+  const draft = edgeInset.trim() === "" || !scanArea || scanArea.x[1] <= scanArea.x[0] || scanArea.y[1] <= scanArea.y[0]
+    ? { error: "Enter an edge inset that leaves a usable scan area." } : previewGrid(scanArea, Number(spacing), position);
+  const choices = gridChoices(scanArea && scanArea.x[1] > scanArea.x[0] && scanArea.y[1] > scanArea.y[0] ? scanArea : null);
+  const gridCorners = scanArea ? cornerNames.map(name => ({ name, ...areaCorner(scanArea, name) })) : [];
   // The route belongs only to the exact server plan. Local dots are never scan approval.
   const currentPlan =
-    !!state?.plan && Number(spacing) === state.plan.grid.spacing;
+    !!state?.plan && Number(spacing) === state.plan.grid.spacing && inset === (state.plan.edgeInset ?? 0);
   const spacingDirty = spacingEdited && !currentPlan;
   const plan = state?.plan;
   const prompt = state?.prompt;
@@ -258,7 +269,7 @@ function SurfaceSession({ active }: { active: boolean }) {
     phase !== "scan" ||
     !prompt;
   const nearest = position
-    ? [...corners].sort(
+    ? [...(stage === "grid" ? gridCorners : corners)].sort(
         (a, b) =>
           Math.hypot(a.x - position.x, a.y - position.y) -
           Math.hypot(b.x - position.x, b.y - position.y),
@@ -296,6 +307,7 @@ function SurfaceSession({ active }: { active: boolean }) {
       client.releaseHold();
   }, [isActive, online, state?.offline, phase, stage, client]);
   useEffect(() => () => client.releaseHold(), [client]);
+  useEffect(() => { setClearanceConfirmed(false); }, [state?.sessionId, phase]);
   useEffect(() => {
     if (!state?.nativeJog) setJogMode("step");
     if (!geometryReady) setMappingView("teach");
@@ -489,7 +501,7 @@ function SurfaceSession({ active }: { active: boolean }) {
   async function preview() {
     if (planningLocked || !geometryReady || !draft?.grid || !draft.startsHere)
       return;
-    if (await call("plan", { spacing: Number(spacing) }))
+    if (await call("plan", { spacing: Number(spacing), edgeInset: inset }))
       setSpacingEdited(false);
   }
 
@@ -504,7 +516,7 @@ function SurfaceSession({ active }: { active: boolean }) {
     )
       return;
     // Recheck the draft at activation, not just when the button was rendered.
-    if (Number(spacing) !== state.plan.grid.spacing) return;
+    if (!currentPlan) return;
     setSpacingEdited(false);
     void call("scan", { planId: state.planId });
   }
@@ -540,7 +552,7 @@ function SurfaceSession({ active }: { active: boolean }) {
         ? "Scan route · dashed return check"
         : stage === "grid"
           ? "Draft grid · preview the route before measurement"
-          : `${corners.length} of 4 inset corners recorded`;
+          : `${corners.length} of 4 corners recorded`;
 
   return (
     <section
@@ -556,6 +568,7 @@ function SurfaceSession({ active }: { active: boolean }) {
           <h1>Surface mapping</h1>
           <p>Define the usable area. Plan the grid. Measure the surface.</p>
         </div>
+        <SurfaceHistory preview={historyPreview} onPreview={setHistoryPreview} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs
@@ -611,9 +624,10 @@ function SurfaceSession({ active }: { active: boolean }) {
 
       <div className="surface-layout grid min-w-0 grid-cols-1 items-start gap-4 min-[900px]:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_318px]">
         <div className="surface-canvas order-2 min-w-0 overflow-hidden rounded-lg border bg-card min-[900px]:order-1">
-          {showResults && state && <SurfaceResults state={state} />}
+          {historyPreview && <div className="border-b bg-muted p-3 text-sm" role="status">Historical view · {historyPreview.cornerCount} corners, {historyPreview.measurementCount} contacts. Saved view only; not an active scan.<Button variant="link" onClick={() => setHistoryPreview(null)}>Return to current setup</Button></div>}
+          {!historyPreview && showResults && state && <SurfaceResults state={state} />}
           <Collapsible
-            open={!showResults || resultGeometryOpen}
+            open={!!historyPreview || !showResults || resultGeometryOpen}
             onOpenChange={setResultGeometryOpen}
           >
             {showResults && (
@@ -629,7 +643,7 @@ function SurfaceSession({ active }: { active: boolean }) {
             )}
             <CollapsibleContent
               forceMount
-              hidden={showResults && !resultGeometryOpen}
+              hidden={!historyPreview && showResults && !resultGeometryOpen}
             >
               <div className="flex items-start justify-between gap-3 px-4 py-4">
                 <div>
@@ -664,10 +678,10 @@ function SurfaceSession({ active }: { active: boolean }) {
               </div>
               <SurfacePlot
                 active={active}
-                state={state}
-                currentPlan={currentPlan}
+                state={historyPreview ? { ...state, ...historyPreview, status: null, currentPoint: null } : state}
+                currentPlan={historyPreview ? !!historyPreview.plan : currentPlan}
                 draft={draft}
-                showDraft={stage === "grid"}
+                showDraft={!historyPreview && stage === "grid"}
                 canAccept={!controlsLocked}
                 canMove={clickMove && !controlsLocked && !!area}
                 onAccept={acceptSuggested}
@@ -702,7 +716,7 @@ function SurfaceSession({ active }: { active: boolean }) {
                 <span id="supportHint">
                   {copper
                     ? "Every grid point must contact continuous copper on the clipped face."
-                    : "Inset every corner far enough for the whole puck to sit on the material."}
+                    : "Support the whole puck at every probe point. Use the grid inset when you teach the board edges."}
                 </span>{" "}
                 Stock size is not machine travel.
               </div>
@@ -1069,8 +1083,7 @@ function SurfaceSession({ active }: { active: boolean }) {
             </div>
             {corners.length > 0 && (
               <p className="flex items-start gap-2 text-xs text-muted-foreground">
-                <LockKeyhole className="mt-0.5 size-3.5 shrink-0" />Z locked at
-                the taught height. Clear corners before changing Z.
+                <LockKeyhole className="mt-0.5 size-3.5 shrink-0" />Z locked here. Use the clearance controls on the grid page to adjust Z without losing boundaries.
               </p>
             )}
             <Button
@@ -1256,6 +1269,21 @@ function SurfaceSession({ active }: { active: boolean }) {
                 : ""}
             </p>
             <div id="planning" className="space-y-4">
+              <NumberField id="edgeInset" label="Inset from taught boundary (mm)" min="0" step="0.1" value={edgeInset} disabled={planningLocked}
+                onChange={event => { setEdgeInset(event.target.value); setSpacingEdited(true); }} />
+              <p className="text-xs text-muted-foreground">Points cover the inside of this rectangle, including its perimeter. If you taught the physical board edges, inset by at least the puck radius plus support clearance. Leave 0 if your taught area already allows for the puck. The smaller map must still cover every cutting path; no edge extrapolation.</p>
+              <section className="space-y-3 rounded-lg border p-3" aria-label="Scan Z clearance">
+                <h3 className="text-sm font-semibold">Set scan clearance · Z {number(position?.z)} mm</h3>
+                <p className="text-xs text-muted-foreground">Put the puck aside while lowering. Raise enough for the puck and clamps to fit below the cutter across the route. At contact setup, the tip-to-puck gap must be less than 5 mm. Changing Z keeps XY boundaries and requires a new route preview.</p>
+                <CheckField id="clearanceConfirmed" label="The Z path is clear; I am watching the cutter." checked={clearanceConfirmed} disabled={planningLocked} onCheckedChange={value => setClearanceConfirmed(value === true)} />
+                <SelectField id="clearanceStep" label="Z step" value={clearanceStep} disabled={planningLocked} onChange={event => setClearanceStep(event.target.value)}>
+                  <NativeSelectOption value="0.1">0.1 mm</NativeSelectOption><NativeSelectOption value="1">1 mm</NativeSelectOption>
+                </SelectField>
+                <div className="flex gap-2">
+                  <Button id="clearanceUp" variant="outline" disabled={planningLocked || !clearanceConfirmed} onClick={() => void call("clearance-jog", { axis: "z", delta: Number(clearanceStep), speed: "normal", confirmed: true })}><ArrowUp />Raise Z</Button>
+                  <Button id="clearanceDown" variant="outline" disabled={planningLocked || !clearanceConfirmed} onClick={() => void call("clearance-jog", { axis: "z", delta: -Number(clearanceStep), speed: "normal", confirmed: true })}><ArrowDown />Lower Z</Button>
+                </div>
+              </section>
               <div
                 id="gridChoices"
                 className="grid grid-cols-3 gap-2"
@@ -1326,7 +1354,7 @@ function SurfaceSession({ active }: { active: boolean }) {
                   ? ""
                   : draft?.startsHere
                     ? "The cutter is at a grid point. Measurement will start here."
-                    : "The cutter is between grid points. Move to a corner before previewing the route."}
+                    : "The cutter is between grid points. Move to an inset grid corner before previewing the route."}
               </p>
               <Button
                 id="gridReturn"

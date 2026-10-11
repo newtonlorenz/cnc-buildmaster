@@ -253,7 +253,15 @@ public final class SurfaceMapResource {
                     (grid.y[grid.y.length-1]-grid.y[0])/(grid.y.length-1))));
             next.setStepResolution(resolution); next.setZSurface(0);
             next.setAutoLevelProbeOffset(new Position(0, 0, 0, Units.MM)); next.setApplyToGcode(false);
-            settings.apply(next);
+            // Bulk apply notifies the open panel before its spinners have all
+            // synchronised. Its feedback listener then restores stale bounds.
+            // Use the public setter sequence used by native XYZ import instead.
+            settings.setMin(new Position(next.getMinX(), next.getMinY(), next.getMinZ(), Units.MM));
+            settings.setMax(new Position(next.getMaxX(), next.getMaxY(), next.getMaxZ(), Units.MM));
+            settings.setStepResolution(next.getStepResolution());
+            settings.setZSurface(next.getZSurface());
+            settings.setAutoLevelProbeOffset(next.getAutoLevelProbeOffset());
+            settings.setApplyToGcode(false);
             invoke(scanner, "update", new Class<?>[]{Position.class, Position.class},
                     new Position(grid.x[0], grid.y[0], minZ, Units.MM),
                     new Position(grid.x[grid.x.length-1], grid.y[grid.y.length-1], maxZ, Units.MM));
@@ -291,12 +299,15 @@ public final class SurfaceMapResource {
         }
         return r;
     }
-    /** Restore object state without firing the listeners that caused a failure. */
+    /** Restore the empty scanner before synchronising settings and visible preview. */
     static final class Snapshot {
         final Object scanner, settings; final Map<Field,Object> scannerFields = new LinkedHashMap<>(), settingFields = new LinkedHashMap<>();
-        final boolean scanning;
+        final boolean scanning; final AutoLevelSettings saved;
         Snapshot(Object scanner, AutoLevelSettings settings) throws Exception {
             this.scanner = scanner; this.settings = settings;
+            saved = new AutoLevelSettings(settings);
+            // The upstream copy constructor can omit a false apply flag.
+            saved.setApplyToGcode(settings.getApplyToGcode());
             for (String name : List.of("probePositionGrid", "pendingPositions", "minXYZ", "maxXYZ")) {
                 Field f = slot(scanner, name); scannerFields.put(f, f.get(scanner));
             }
@@ -307,9 +318,32 @@ public final class SurfaceMapResource {
             }
         }
         void restore() throws Exception {
-            for (var entry : settingFields.entrySet()) entry.getKey().set(settings, entry.getValue());
             for (var entry : scannerFields.entrySet()) entry.getKey().set(scanner, entry.getValue());
-            ((AtomicBoolean) field(scanner, "isScanning")).set(scanning);
+            try {
+                // Notify while global values still differ, so the open panel
+                // updates its controls. Partial probe data must already be gone.
+                AutoLevelSettings current = (AutoLevelSettings) settings;
+                current.setMin(new Position(saved.getMinX(), saved.getMinY(), saved.getMinZ(), Units.MM));
+                current.setMax(new Position(saved.getMaxX(), saved.getMaxY(), saved.getMaxZ(), Units.MM));
+                current.setStepResolution(saved.getStepResolution());
+                current.setZSurface(saved.getZSurface());
+                current.setAutoLevelProbeOffset(saved.getAutoLevelProbeOffset());
+                current.setApplyToGcode(saved.getApplyToGcode());
+            } finally {
+                // Preserve backend state even when a listener refuses recovery;
+                // the caller then blocks further imports instead of retrying.
+                for (var entry : settingFields.entrySet()) entry.getKey().set(settings, entry.getValue());
+                for (var entry : scannerFields.entrySet()) entry.getKey().set(scanner, entry.getValue());
+                ((AtomicBoolean) field(scanner, "isScanning")).set(scanning);
+            }
+            // SurfaceScanner is a separate NetBeans module, not a UGSLib
+            // dependency. Resolve its listener through that module's loader.
+            Class<?> listenerType = scanner.getClass().getClassLoader().loadClass(
+                    "com.willwinder.ugs.platform.surfacescanner.SurfaceScannerListener");
+            SurfacePins.check(listenerType);
+            Method notify = listenerType.getMethod("onScannerUpdate");
+            for (Object listener : (Iterable<?>) field(scanner, "listeners"))
+                notify.invoke(listener);
             for (var entry : scannerFields.entrySet()) require(entry.getKey().get(scanner) == entry.getValue(), "rollback_readback_failed");
             for (var entry : settingFields.entrySet()) require(Objects.equals(entry.getKey().get(settings), entry.getValue()), "rollback_settings_readback_failed");
         }
