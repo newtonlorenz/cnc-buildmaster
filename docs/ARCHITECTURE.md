@@ -88,6 +88,7 @@ Script paths below are relative to `scripts/` unless stated otherwise.
 | `cnc_map_terminal.py`, `cnc_map_support.py` | Derive measurement geometry and prepare route previews and error descriptions. |
 | `ugs_api.py` | Inspect UGS through an explicit read-only endpoint list; reject redirects and proxy use. |
 | `ugs_map_watch.mjs` | Observe reference continuity during an active session. |
+| `ugs_run_diagnostics.mjs` | Optional passive event diagnostics; exact source-comment classification and fresh stationary-report evidence. No sender or machine commands. |
 | `ugs_map_jog.mjs` | Apply bounded movement and held-jog cancellation through UGS. |
 | `ugs_puck_map.mjs` | Control the supervised contact sequence and save measurements. |
 | `job_handoff.py` | Load only the current session's accepted measurement evidence for native handoff. |
@@ -98,6 +99,18 @@ Both local services bind to loopback. Configuration does not extend firmware
 support or remove compatibility checks. The UGS extension and native surface
 dependencies remain pinned to their supported upstream hashes. Puck height and
 other machine values belong to the installation configuration, not the UI.
+
+During a mapping session, the existing continuity watcher forwards read-only
+`ControllerStatusEvent` reports before enforcing its state guards. This preserves
+the last HOLD or unexpected-spindle report when the observer then refuses the
+session. `controllerReport` is separate from movement-authorising snapshots and
+includes the reported feed override; missing override values stay unknown.
+Freshness requires a report received within three seconds, the same session and
+an active observer. Stop, handoff closure, lost browser connectivity or expiry
+make the display historical. Polling Buildmaster does not refresh this evidence.
+Neither a successful Stop/pause request nor a HOLD report establishes physical
+standstill or a stopped spindle. Buildmaster does not monitor a cutting job after
+its preparation observer closes; inspect UGS status and overrides for that job.
 
 ## Evidence and qualification
 

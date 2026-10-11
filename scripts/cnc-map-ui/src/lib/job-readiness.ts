@@ -25,7 +25,7 @@ export function preparationChecks(job: any, state: any): PreparationCheck[] {
       title: "Cutting files",
       complete: operations.length > 0,
       detail: operations.length
-        ? `${operations.length} operation${operations.length === 1 ? "" : "s"} loaded. Keep files from one machining face together.`
+        ? `${operations.length} operation${operations.length === 1 ? "" : "s"} loaded. Include every intended trim, hole and outline for this face before measuring.`
         : "Open G-code from your CAM software. Gerber files must be converted in CAM first.",
       view: "pcb",
     },
@@ -81,10 +81,10 @@ export function preparationChecks(job: any, state: any): PreparationCheck[] {
       title: "Surface measurements",
       complete: measured,
       detail: measured
-        ? "An accepted map is linked to this job setup. Import and compensation are separate."
+        ? "An accepted map is linked to these operations. A later trim or placement change needs a new coverage review; import and compensation are separate."
         : state?.phase === "complete" && state?.result
           ? "A map is saved, but it is not linked to this job setup. Review coverage and setup before using it."
-          : "Use the cutting area to avoid measuring unused material. A puck waits for you at each point.",
+          : "Map the complete cutting area, including final trims and outlines. An extra margin must fit the stock and clear clamps.",
       view: "surface",
     },
   ];
@@ -143,7 +143,7 @@ export function setupSheet(
     "",
     "1. Keep the tool, workholding and machine connection consistent with the measurements. A change requires a fresh reference review.",
     "2. Export and inspect the aligned draft operation files. Z values are not height-corrected by Buildmaster.",
-    "3. Import an accepted map into the empty AutoLeveler before selecting a cutting file. Check grid coverage and native readback.",
+    "3. Import an accepted map into the empty AutoLeveler before selecting a cutting file. Check native readback and coverage of every operation, including final trims and outlines. Outside the measured rectangle is unmeasured: UGS 2.1.26 applies zero correction there, not the nearest edge height.",
     "4. Use Finish preparation in Buildmaster after export and map import. This ends its reference monitoring. Finish before changing Z or selecting cutting files in UGS.",
     "5. In UGS, establish material-top Z for the fitted cutter. Apply compensation exactly once, only to uncompensated source paths.",
     "6. Review the final toolpath, cutting depths, workholding and clearance. Remove probe clips before spindle operation.",

@@ -18,6 +18,31 @@ try{
  await guide.getByRole('button',{name:'Explore a geometry example'}).click();
  await guide.getByRole('heading',{name:'Rectangle example'}).waitFor();
  await guide.getByRole('img',{name:/Stock, cutting paths/}).waitFor();
+ // The example starts without a cutter, so coverage is deliberately unavailable.
+ await page.locator('#pcbTab').click();
+ await page.getByRole('textbox',{name:'Cutter for rectangle.nc',exact:true}).fill('Synthetic 1 mm cutter');
+ await page.getByRole('spinbutton',{name:'Cutting diameter for rectangle.nc',exact:true}).fill('1');
+ await page.getByRole('button',{name:'Save cutter',exact:true}).click();
+ await page.waitForFunction(()=>window.testTransport.job?.operations[0]?.diameter===1&&!window.testTransport.pending);
+ await page.locator('#pcbWorkspace').getByRole('tab',{name:'Stock',exact:true}).click();
+ await page.locator('#pcbPlaceX').fill('5');
+ await page.locator('#pcbPlaceY').fill('5');
+ await page.locator('#pcbApply').click();
+ await page.waitForFunction(()=>window.testTransport.job?.placement.x===5&&window.testTransport.job?.scanProposal?.area&&!window.testTransport.pending);
+ await page.locator('#guideTab').click();
+ // Prospective margins change the displayed rectangle and discard its prior review.
+ const mapMargin=guide.getByRole('combobox',{name:'Extra map margin (mm per side)',exact:true});
+ await mapMargin.waitFor();
+ const supportReview=guide.getByRole('checkbox',{name:'Every point supports the probe; the complete route clears clamps and leads.',exact:true});
+ await supportReview.check();
+ const marginWrites=writes.length;
+ await mapMargin.selectOption('0');
+ assert.equal(await supportReview.isChecked(),false);
+ await guide.getByText(/including cutter footprints and 0 mm margin on each side/).waitFor();
+ assert.equal(writes.length,marginWrites,'Changing a prospective margin must not send a machine action');
+ await mapMargin.selectOption('1');
+ await guide.getByText(/including cutter footprints and 1 mm margin on each side/).waitFor();
+
  await guide.getByRole('button',{name:'Material & process',exact:true}).click();
  // Both package entry points must respect displayed process drafts.
  await guide.getByRole('combobox',{name:'Material',exact:true}).selectOption('wood');

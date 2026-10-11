@@ -97,3 +97,14 @@ test('unexpected socket close reports failure',async()=>{
   emit:v=>{events.push(v);if(v.kind==='ready')queueMicrotask(()=>MockSocket.last.close());},openTimeoutMs:100});
  assert.equal(code,1);assert.match(events.at(-1).error,/WebSocket closed/);stdin.destroy();
 });
+test('controller report preserves HOLD and feed override before continuity failure without writes',async()=>{
+ const stdin=new PassThrough(),events=[];
+ const held={...status(),state:'HOLD',subState:'0',spindleSpeed:1000,overrides:{feed:200,rapid:100,spindle:100}};
+ const code=await runWatch({WebSocketClass:MockSocket,doctor:doctor(),firmwareSettings:{0:'10'},request,stdin,
+  emit:v=>{events.push(v);if(v.kind==='ready')queueMicrotask(()=>MockSocket.last.emit('message',event('ControllerStatusEvent',{status:held})));},openTimeoutMs:100});
+ assert.equal(code,1);
+ const report=events.find(e=>e.kind==='controller-report');
+ assert.deepEqual(report.status,held);
+ assert.ok(events.indexOf(report)<events.findIndex(e=>e.kind==='failure'));
+ stdin.destroy();
+});

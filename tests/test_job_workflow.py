@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from pcb_workspace import Workspace
-from job_workflow import scan_area, fingerprint, plan_status, configure_workflow, map_source_current
+from job_workflow import scan_area, scan_proposal, fingerprint, plan_status, configure_workflow, map_source_current
 from job_handoff import accepted_payload
 from cnc_map_web import Controller
 from job_actions import perform
@@ -123,6 +123,45 @@ class WorkflowTests(unittest.TestCase):
         before=fingerprint(j);j.operations[0]['diameter']=2;self.assertNotEqual(before,fingerprint(j))
         j.stock['width']=16
         with self.assertRaises(ValueError):scan_area(j)
+
+    def test_scan_covers_all_operations_and_later_trim_invalidates_identity(self):
+        j = job(); before = scan_area(j)
+        j.import_files([{'name': 'later-trim.nc', 'source': SOURCE.replace('X15', 'X35')}])
+        j.operation({'id': j.operations[-1]['id'], 'role': 'outline', 'tool': 'Trim cutter', 'diameter': 2})
+        after = scan_area(j)
+        self.assertEqual(after['operationCount'], 2)
+        self.assertGreater(after['area']['x'][1], 35)
+        self.assertLessEqual(after['area']['x'][0], before['area']['x'][0])
+        self.assertNotEqual(after['fingerprint'], before['fingerprint'])
+
+    def test_extra_margin_choices_use_stock_clamp_and_travel_bounds(self):
+        j = job(); j.stock.update(x=-30, y=-30, width=100, height=100)
+        j.workflow['fixture'] = fixture(False)
+        self.assertEqual([o['margin'] for o in scan_area(j)['marginOptions']], [0, 1, 5, 10, 15, 20])
+        expanded = scan_area(j, 15)
+        self.assertEqual(expanded['area'], {'x': [-10.52, 30.52], 'y': [-10.52, 30.52]})
+        with self.assertRaisesRegex(ValueError, '0–20'): scan_area(j, 21)
+        j.workflow['fixture']['bounds']['x'][1] = 25
+        self.assertEqual([o['margin'] for o in scan_area(j)['marginOptions']], [0, 1, 5])
+        with self.assertRaisesRegex(ValueError, 'travel bounds'): scan_area(j, 15)
+        j.workflow['fixture']['bounds']['x'][1] = 50
+        j.workflow['fixture']['clamps'] = [dict(id='edge', x=24, y=0, width=2, height=20, baseZ=0, heightZ=5)]
+        self.assertEqual([o['margin'] for o in scan_area(j)['marginOptions']], [0, 1, 5])
+        with self.assertRaisesRegex(ValueError, 'clamp'): scan_area(j, 15)
+        j.workflow['fixture'] = None
+        j.stock['x'] = 0
+        self.assertEqual([o['margin'] for o in scan_area(j)['marginOptions']], [0, 1])
+        with self.assertRaisesRegex(ValueError, 'outside the stock'): scan_area(j, 15)
+
+    def test_preview_offers_zero_margin_when_default_one_cannot_fit(self):
+        j = job(); j.stock.update(x=4, y=4, width=12, height=12, margin=0)
+        proposal = scan_proposal(j)
+        self.assertEqual(proposal['margin'], 0)
+        self.assertEqual([o['margin'] for o in proposal['marginOptions']], [0])
+        with self.assertRaisesRegex(ValueError, 'outside the stock'): scan_area(j, 1)
+        c = Controller(True); self.addCleanup(setattr, c, 'closed', True)
+        c.pcb = j
+        self.assertEqual(c.pcb_state()['scanProposal']['margin'], 0)
 
     def test_clamps_reject_scan_overlap(self):
         j=job();j.workflow['fixture']=fixture(True)

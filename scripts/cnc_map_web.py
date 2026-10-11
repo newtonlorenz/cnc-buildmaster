@@ -25,7 +25,7 @@ from cnc_map_terminal import ROOT, CORNERS, snapshot, position, make_config, sav
 from cnc_map_support import fault_details, scan_route, corner_issue
 from pcb_workspace import Workspace
 from job_actions import ACTIONS as JOB_ACTIONS, perform as job_action
-from job_workflow import scan_area, fingerprint, plan_status, configure_workflow, map_source_current, preparation_view
+from job_workflow import scan_area, scan_proposal, fingerprint, plan_status, configure_workflow, map_source_current, preparation_view
 
 ASSETS = Path(__file__).with_name('cnc-map-web')
 MAX_JOB_PACKAGE_BYTES = 24_000_000
@@ -61,6 +61,7 @@ class Controller:
         self.monitor = None
         self.monitor_thread = None
         self.monitor_closing = False
+        self.controller_report_at = None
         self.token = secrets.token_urlsafe(32)
         self.owner = None
         self.revoked_owners = set()
@@ -126,9 +127,25 @@ class Controller:
             # or mutation authority. Never block the heartbeat on CAM geometry.
             # Writes still check the supplied revision under pcb_lock.
             data['pcbRevision'] = self.pcb.revision
+            report = data.get('controllerReport')
+            if report:
+                age = max(0, (time.monotonic()-self.controller_report_at)*1000)
+                report['ageMs'] = round(age)
+                report['fresh'] = bool(age <= 3000 and self.data.get('continuityActive')
+                                       and not self.monitor_closing and not self.stopped
+                                       and report['sessionId'] == self.data['sessionId'])
         data['agent'] = self.agent.public()
         data['surfaceHistory'] = self.history.list()
         return data
+
+    def record_controller_report(self, status):
+        # This evidence is never used to authorise movement or establish a stop.
+        if not isinstance(status, dict) or not isinstance(status.get('state'), str):
+            raise ValueError('Invalid controller status report')
+        with self.lock:
+            self.data['controllerReport'] = dict(status=copy.deepcopy(status), source='UGS websocket',
+                                                sessionId=self.data['sessionId'])
+            self.controller_report_at = time.monotonic()
 
     def history_identity(self):
         return hashlib.sha256(json_bytes({k: self.profile.get(k) for k in
@@ -204,7 +221,7 @@ class Controller:
             # Session/alignment/map authority is checked afresh by each consumer.
             preview = preparation_view(data)
             data['guide'] = plan_status(self.pcb, self.data['sessionId'], self.data, preview=preview)
-            try: data['scanProposal'] = scan_area(self.pcb, preview=preview)
+            try: data['scanProposal'] = scan_proposal(self.pcb, preview=preview)
             except ValueError as e: data['scanProposal'] = {'error':str(e)}
             data['savedJobs'] = [] if self.demo else [
                 {'id': p.name, 'label': p.stem.replace('.pcb-job', '')}
@@ -480,11 +497,14 @@ class Controller:
         def watch():
             try:
                 for line in monitor.stdout:
-                    self.log('Connection monitor: '+line.rstrip())
                     try:
                         event = json.loads(line)
                     except ValueError:
                         self.stop('Invalid connection-monitor response'); break
+                    if event.get('kind') == 'controller-report':
+                        self.record_controller_report(event.get('status'))
+                        continue
+                    self.log('Connection monitor: '+line.rstrip())
                     if event.get('kind') == 'failure':
                         self.stop(event.get('error', 'Connection monitor failed')); break
                     if event.get('kind') == 'ready':

@@ -53,7 +53,7 @@ your operating system, with Light and Dark overrides. Use **Cmd/Ctrl+K** to find
 tool. Stop and machine coordinates remain visible on small screens.
 
 For a rectangular map, record two opposite corners and check the two inferred
-corners. Accept both in one action without travelling to them. Grid presets show
+corners. Accept both in one action without travelling to them. Plan all operations, including a later outside trim, before measuring. Grid presets show
 the exact placement count, including the return check. Wider spacing saves
 placements but can miss surface variation; choose it for the cutting job.
 
@@ -80,6 +80,9 @@ It does not send cutting jobs or apply height correction to exported cutting fil
 
 An exported cutting file is a **draft for inspection in UGS**, not an approved machining job.
 
+For troubleshooting a pause, the optional [passive run observer](docs/RUN_DIAGNOSTICS.md)
+checks fresh stationary reports and spindle status separately. It sends no machine commands.
+
 ## Transfer a measured surface to UGS
 
 With the compatible extension installed, Buildmaster can import an accepted map
@@ -90,10 +93,12 @@ into UGS AutoLeveler and check every returned coordinate and height.
 3. Open an empty UGS AutoLeveler and turn **Apply to G-code** off.
 4. Select **Import accepted map into UGS** in Buildmaster. Require verified readback.
 5. Select **Finish preparation in UGS** before changing the work reference or loading a cutting file.
-6. Verify material-top Z and full cutting-path coverage. Enable compensation in UGS
-   once, then inspect the actual processed cutting file before starting.
+6. Verify material-top Z and full cutter-path coverage. For uncompensated source, enable compensation in UGS
+   once, then inspect the actual processed cutting file before starting. Keep it off for externally corrected files.
 
-Import does not set material Z, apply compensation or start cutting. Keep the
+Import does not set material Z, apply compensation or start cutting. UGS 2.1.26
+uses zero correction beyond the measured rectangle, not the closest edge height.
+See [follow-up cuts and map limits](docs/OPERATION.md#follow-up-cuts-and-map-limits). Keep the
 same connection, tool and workholding throughout. See the
 [operation guide](docs/OPERATION.md) and [UGS setup](docs/UGS.md).
 

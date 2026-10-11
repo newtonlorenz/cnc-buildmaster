@@ -186,6 +186,7 @@ export function JobGuide() {
   } = useWorkbench();
   const [message, setMessage] = useState("");
   const [reviewed, setReviewed] = useState(false);
+  const [scanMargin, setScanMargin] = useState(1);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [process, setProcess] = useState({
     material: "pcb",
@@ -208,7 +209,7 @@ export function JobGuide() {
     jobGeneration,
   ]);
   useEffect(
-    () => setReviewed(false),
+    () => { setReviewed(false); setScanMargin(1); },
     [job?.guide.fingerprint, state?.sessionId],
   );
   useEffect(() => {
@@ -253,7 +254,12 @@ export function JobGuide() {
   const locked = processLocked || processDirty;
   const operations = job.operations,
     guide = job.guide,
-    proposal = job.scanProposal;
+    baseProposal = job.scanProposal;
+  const marginChoices = baseProposal?.marginOptions || [];
+  const selectedMargin = marginChoices.find((option: any) => option.margin === scanMargin);
+  const proposal = selectedMargin
+    ? { ...baseProposal, ...selectedMargin }
+    : baseProposal;
   const checks = preparationChecks(job, state);
   const next = checks.find((c) => !c.complete);
   const adopt =
@@ -752,15 +758,33 @@ export function JobGuide() {
                 </PlanFooter>
               </Plan>
               <Panel
-                title="Map only what you need"
+                title="Map every planned operation"
                 description={
                   proposal?.area
-                    ? `${mm(proposal.area.x[1] - proposal.area.x[0])} × ${mm(proposal.area.y[1] - proposal.area.y[0])} mm, including cutter footprint and 1 mm margin.`
+                    ? `${mm(proposal.area.x[1] - proposal.area.x[0])} × ${mm(proposal.area.y[1] - proposal.area.y[0])} mm, including cutter footprints and ${mm(proposal.margin)} mm margin on each side.`
                     : proposal?.error
                 }
               >
                 {proposal?.area ? (
                   <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Include every cutting file for this face, including final trims,
+                      holes and outlines, before measuring. A margin reserves measured
+                      area; any operation added later still needs a coverage review.
+                    </p>
+                    <SelectField
+                      label="Extra map margin (mm per side)"
+                      help="Choices fit the declared stock and fixture. Check actual puck support, clamp and lead clearance before using a larger area."
+                      value={String(proposal.margin)}
+                      disabled={locked}
+                      options={marginChoices.map((option: any) => ({
+                        value: String(option.margin), label: `${option.margin} mm`,
+                      }))}
+                      onChange={(event) => {
+                        setScanMargin(Number(event.target.value));
+                        setReviewed(false);
+                      }}
+                    />
                     <p className="text-sm text-muted-foreground">
                       {job.workflow.material === "pcb"
                         ? "Continuous copper can follow the checked route automatically. Choose a puck in Surface mapping if the surface is not continuously conductive."
@@ -780,7 +804,7 @@ export function JobGuide() {
                           await run("pcb-map-job", {
                             reviewed: true,
                             fingerprint: guide.fingerprint,
-                            margin: 1,
+                            margin: proposal.margin,
                           })
                         )
                           navigate("surface");
@@ -816,6 +840,12 @@ export function JobGuide() {
                   </Button>
                 )}
               </Panel>
+              <Notice>
+                Outside the measured rectangle, surface height is unknown. UGS
+                2.1.26 applies zero height correction there; it does not extend the
+                nearest measured edge. Review every operation against the map and
+                apply compensation exactly once to uncompensated source files.
+              </Notice>
               <Panel
                 id="nativeHandoff"
                 title="Continue in UGS"

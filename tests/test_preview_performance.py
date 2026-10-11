@@ -182,8 +182,9 @@ class PreviewPerformanceTests(unittest.TestCase):
                 (lambda: operation.update(diameter=None), 'Save each cutter'),
                 (lambda: job.stock.update(thickness=.01, spoilAllowance=0), 'stock and depth'),
                 (lambda: job.placement.update(x=100), 'stock and depth'),
-                (lambda: job.workflow.update(fixture={'clearance': 1, 'clamps': [
-                    {'x': 6, 'y': 6, 'width': 2, 'height': 2}]}), 'clamp overlaps')):
+                (lambda: job.workflow.update(fixture={'bounds': {'x': [-30, 100], 'y': [-30, 100], 'z': [-10, 40]},
+                    'clearance': 1, 'clamps': [
+                    {'id': 'test-clamp', 'x': 6, 'y': 6, 'width': 2, 'height': 2, 'baseZ': 0, 'heightZ': 5}]}), 'clamp overlaps')):
             with self.subTest(message=message):
                 saved = copy.deepcopy((job.stock, job.placement, job.workflow, operation['diameter']))
                 mutation()

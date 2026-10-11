@@ -113,6 +113,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { StopButton, Notice } from "@/components/workbench-controls";
+import { machineStatusEvidence } from "@/machine-status";
 
 const sections = [
   {
@@ -872,7 +873,14 @@ function WorkbenchSidebar({
 function StatusBar({ openLog }: { openLog: () => void }) {
   const { state, online, pending } = useWorkbench();
   const position = state?.status?.machineCoord;
+  const evidence = machineStatusEvidence(state, online);
   return (
+    <>
+    {evidence && <div className="shrink-0 border-t bg-card px-4 py-2 text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1" id="controllerEvidence">
+      {state?.phase === "stopped" && <span>{evidence.controller}</span>}
+      <strong className={evidence.nonDefaultFeed ? "text-destructive" : ""}>{evidence.feed}</strong>
+      {evidence.notice && <span role="status">{evidence.notice}</span>}
+    </div>}
     <footer className="statusbar">
       <div>
         <span className={online ? "connection-dot online" : "connection-dot"} />
@@ -882,12 +890,10 @@ function StatusBar({ openLog }: { openLog: () => void }) {
             : state?.offline
               ? "Offline preparation"
               : state?.phase === "stopped"
-                ? "Session stopped"
+                ? "Session ended · stop unverified"
                 : state?.demo
                   ? "Simulation connected"
-                  : state?.status
-                    ? "UGS " + state.status.state
-                    : "Local API"}
+                  : evidence?.controller ?? "Local API"}
         </span>
         <span className="status-task">
           {state?.offline
@@ -921,6 +927,7 @@ function StatusBar({ openLog }: { openLog: () => void }) {
         </Button>
       </div>
     </footer>
+    </>
   );
 }
 function UtilityDialog({

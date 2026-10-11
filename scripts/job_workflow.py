@@ -82,26 +82,57 @@ def _preparation_view(job, session, preview):
     return preview
 
 
-def scan_area(job, margin=1, *, preview=None):
-    margin = finite(margin, 'Scan margin')
-    require(0 <= margin <= 10, 'Scan margin must be 0–10 mm')
-    require(job.operations, 'Add cutting files before planning their surface map')
-    preview = _preparation_view(job, None, preview)
-    require(all(o['diameter'] is not None and o['tool'] for o in preview['operations']), 'Save each cutter before deriving map coverage')
-    require(all(o['fits'] and o['depthOk'] for o in preview['operations']), 'Resolve stock and depth checks before mapping this job')
-    area = {a: [math.floor((min(o['footprint'][a][0] for o in preview['operations'])-margin)*1000)/1000,
-                math.ceil((max(o['footprint'][a][1] for o in preview['operations'])+margin)*1000)/1000] for a in 'xy'}
+SCAN_MARGIN_CHOICES = (0, 1, 5, 10, 15, 20)
+
+
+def _scan_bounds(job, operations, margin):
+    area = {a: [math.floor((min(o['footprint'][a][0] for o in operations)-margin)*1000)/1000,
+                math.ceil((max(o['footprint'][a][1] for o in operations)+margin)*1000)/1000] for a in 'xy'}
     stock = job.stock
     for a, size in [('x','width'),('y','height')]:
         require(area[a][0] >= stock[a] and area[a][1] <= stock[a]+stock[size],
                 'Scan margin extends outside the stock. Reduce the margin or adjust placement.')
-    fixture=job.workflow.get('fixture')
+    fixture = job.workflow.get('fixture')
     if fixture:
+        require(all(area[a][0] >= fixture['bounds'][a][0]+fixture['clearance'] and
+                    area[a][1] <= fixture['bounds'][a][1]-fixture['clearance'] for a in 'xy'),
+                'The proposed scan rectangle exceeds the declared fixture travel bounds.')
         for clamp in fixture['clamps']:
             require(not (area['x'][0] <= clamp['x']+clamp['width']+fixture['clearance'] and area['x'][1] >= clamp['x']-fixture['clearance'] and area['y'][0] <= clamp['y']+clamp['height']+fixture['clearance'] and area['y'][1] >= clamp['y']-fixture['clearance']), 'A clamp overlaps the proposed scan rectangle. Adjust the fixture or job placement.')
-    return {'area': area, 'margin': margin, 'fingerprint': fingerprint(job),
+    return area
+
+
+def scan_area(job, margin=1, *, preview=None):
+    margin = finite(margin, 'Scan margin')
+    require(0 <= margin <= 20, 'Scan margin must be 0–20 mm')
+    require(job.operations, 'Add every intended cutting file, including trims and outlines, before planning their surface map')
+    preview = _preparation_view(job, None, preview)
+    operations = preview['operations']
+    require(all(o['diameter'] is not None and o['tool'] for o in operations), 'Save each cutter before deriving map coverage')
+    require(all(o['fits'] and o['depthOk'] for o in operations), 'Resolve stock and depth checks before mapping this job')
+    area = _scan_bounds(job, operations, margin)
+    choices = []
+    for candidate in SCAN_MARGIN_CHOICES:
+        try:
+            choices.append({'margin': candidate, 'area': _scan_bounds(job, operations, candidate)})
+        except ValueError:
+            pass  # Never offer a rectangle rejected by the same stock/fixture checks.
+    return {'area': area, 'margin': margin, 'marginOptions': choices,
+            'operationCount': len(operations), 'fingerprint': fingerprint(job),
             'probeMode': 'copper' if job.workflow['material'] == 'pcb' else 'puck',
-            'note': 'Full rectangular coverage including cutter footprint. Confirm conductive contact or puck support at every point.'}
+            'note': 'Coverage includes every loaded operation and cutter footprint. Add later trims before scanning; a margin does not validate an unseen toolpath. Confirm puck support and route clearance.'}
+
+
+def scan_proposal(job, *, preview=None):
+    """Offer a usable default without changing explicit map-action validation."""
+    try:
+        return scan_area(job, 1, preview=preview)
+    except ValueError as default_error:
+        try:
+            return scan_area(job, 0, preview=preview)
+        except ValueError:
+            # Bounds only expand with margin; no larger choice can rescue zero.
+            raise default_error
 
 
 def map_source_current(job, session, machine):
@@ -123,8 +154,8 @@ def plan_status(job, session, machine, *, preview=None):
     checks = [
         {'id':'files', 'label':'Prepare the job', 'complete':bool(j['operations']) and all(o['tool'] and o['diameter'] is not None and o['fits'] and o['depthOk'] and not any(not w.startswith('The initial approach') for w in o['warnings']) for o in j['operations']), 'detail':'Load CAM files, set stock and identify every cutter.'},
         {'id':'alignment', 'label':'Check placement', 'complete':job.valid_alignment(session), 'detail':'Two references align the job; a third checks the result.'},
-        {'id':'surface', 'label':'Measure the surface', 'complete':measured, 'detail':'Use this job’s cutting area and the correct contact method.'},
-        {'id':'handoff', 'label':'Review in UGS', 'complete':False, 'detail':'Map import, material Z and compensation are separate checks.'},
+        {'id':'surface', 'label':'Measure the surface', 'complete':measured, 'detail':'Cover every operation, including trims and outlines; outside the measured rectangle remains unmeasured.'},
+        {'id':'handoff', 'label':'Review in UGS', 'complete':False, 'detail':'Verify full map coverage and material Z; apply compensation exactly once to uncompensated sources.'},
     ]
     return {'fingerprint':identity, 'steps':checks, 'mapMatchesJob':matches, 'measured':measured,
             'sourceCompensation':job.workflow['sourceCompensation'], 'cuttingReleased':False,

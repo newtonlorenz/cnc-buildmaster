@@ -122,7 +122,14 @@ export async function runWatch({WebSocketClass, doctor, firmwareSettings, reques
     const watch = new ReferenceWatch({settings:doctor.settings,status:doctor.status,firmwareSettings});
     ensure(!doctor.file.fileName && !doctor.file.remainingRowCount, 'Unexpected selected file');
     ws = new WebSocketClass(socketUrl);
-    ws.on('message',data => { if (!ended) try { watch.event(String(data)); } catch(e) { end(e); } });
+    ws.on('message',data => { if (!ended) try {
+      const raw = String(data), parsed = parseEvent(raw);
+      // Retain the controller's report before continuity checks reject HOLD,
+      // spindle activity or another unexpected state. It is observation only.
+      if (parsed.eventType === 'ControllerStatusEvent' && parsed.event?.status)
+        emit({kind:'controller-report', status:parsed.event.status});
+      watch.event(raw);
+    } catch(e) { end(e); } });
     ws.on('error',end); ws.on('close',() => { if (!ended) end(Error('Continuity WebSocket closed')); });
     let lastPong = Date.now(), pongSeen = false, snapshotChecked = false, readyStatus = null;
     const maybeReady = () => {

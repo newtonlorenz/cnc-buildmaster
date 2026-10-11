@@ -27,3 +27,14 @@ test('setup sheet preserves scope and escaped user data without inventing cuttin
  assert.ok(report.indexOf('Use Finish preparation') < report.indexOf('In UGS, establish material-top Z'));
  assert.ok(report.includes('source-hash'));assert.ok(!report.includes('[x] Surface measurements'));
 });
+
+test('surface guidance includes later outlines and identifies unmeasured edges without extrapolation',()=>{
+ const j=job();
+ assert.match(preparationChecks(j,{}).find(c=>c.id==='files').detail,/every intended trim, hole and outline/);
+ assert.match(preparationChecks(j,{}).find(c=>c.id==='surface').detail,/including final trims and outlines/);
+ j.guide.measured=true;
+ assert.match(preparationChecks(j,{}).find(c=>c.id==='surface').detail,/later trim or placement change/);
+ const report=setupSheet(j,{});
+ assert.match(report,/zero correction there, not the nearest edge height/);
+ assert.match(report,/Apply compensation exactly once/);
+});

@@ -13,7 +13,7 @@ its package in a configured machine workspace before capturing references.
 
 ## Job preparation
 
-1. Add existing CAM files for one machining face.
+1. Add existing CAM files for one machining face, including any later outside trim or engraving. Plan the complete job before measuring.
 2. Enter the stock dimensions, thickness and usable margin.
 3. Assign the actual cutter and effective cutting diameter to each operation.
 4. Inspect the orientation with an asymmetric feature.
@@ -77,7 +77,7 @@ The application does not retry a failed probe automatically.
 
 Only a complete accepted grid can produce a height map.
 A moved workpiece, tool change or new connection invalidates the reference.
-Do not apply height compensation twice. The finished panel lets you copy the map
+Do not apply height compensation twice. A file with baked surface correction must keep native Apply to G-code off. The finished panel lets you copy the map
 file path, then guides separate import, cutting-datum verification and compensation
 in UGS. Copying the path does not import it or alter G54.
 
@@ -171,3 +171,36 @@ Z path and watch the cutter. Put the puck aside when lowering. The app preserves
 XY boundaries, updates the taught travel height only after verified movement, and
 invalidates the old route. Preview again before scanning. During an active scan,
 manual Z remains locked; stop and establish a fresh setup before changing it.
+
+## Follow-up cuts and map limits
+
+Check the cutter-swept bounds of every new operation against the measured map,
+including ramps and the cutter radius. Leave supported room for later trim when
+planning the original map. A larger stock rectangle does not mean that area has
+been measured.
+
+UGS 2.1.26 uses zero correction outside its native mesh rectangle; it does not
+hold the nearest edge height. If the new job exceeds coverage, review a measured
+extension, moving/resizing the job within measured coverage, or an explicitly
+accepted external estimate. Buildmaster does not generate estimated heights.
+Keep estimated surfaces separate from measured data with source hashes, method,
+accepted bounds and uncertainty. Never import an arbitrary nonuniform extension
+into the native uniform-grid processor. Independently inspect any externally
+corrected output, preserve its source and measured map, and disable native
+compensation to prevent applying correction twice.
+
+## Pauses, overrides and physical results
+
+A successful Stop request acknowledges a request, not a stationary machine.
+Observe fresh, consecutive stationary HOLD/Idle reports and report spindle state
+separately. Feed hold can leave the spindle running. A programmed spindle-off
+inspection pause is different from feed hold. Controller spindle0 still requires
+physical confirmation before approaching the cutter. Use the physical stop if
+movement persists or observation is lost; do not retry or resume automatically.
+
+Record feed, rapid and spindle overrides before and during each cut in UGS.
+An override of200% changes a programmed100 mm/min feed to200 mm/min where the
+controller can attain it. Missing or stale telemetry is unknown, never100%.
+Do not silently reset the operator's overrides. Record actual reported feeds and
+inspection results with the recipe; controller completion alone does not qualify
+cut depth, finish, stock retention or a more aggressive pass count.
